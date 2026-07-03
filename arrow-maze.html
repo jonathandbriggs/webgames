@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#12121a">
+<title>Arrow Maze</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#12121a; color:#eee;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px;
+  }
+  header .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  header .left { font-size:15px; color:#aaa; }
+  header .left b { color:#fff; font-size:18px; }
+  #newBtn {
+    background:#26263a; color:#eee; border:0; border-radius:10px;
+    padding:8px 14px; font-size:15px; font-weight:600; cursor:pointer;
+    touch-action:manipulation;
+  }
+  #newBtn:active { transform:scale(.94); }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #board { position:relative; touch-action:manipulation; }
+  .tile {
+    position:absolute; border-radius:22%;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    box-shadow: inset 0 -3px 0 rgba(0,0,0,.25), inset 0 2px 0 rgba(255,255,255,.18);
+    touch-action:none;
+  }
+  .tile svg { width:62%; height:62%; fill:rgba(255,255,255,.92); pointer-events:none; }
+  .tile.gone { pointer-events:none; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:18px;
+    align-items:center; justify-content:center;
+    background:rgba(10,10,16,.78); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .3s;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #overlay .msg { font-size:42px; font-weight:800; }
+  #overlay .sub { color:#999; font-size:15px; }
+  #nextBtn {
+    background:#4d96ff; color:#fff; border:0; border-radius:14px;
+    padding:14px 34px; font-size:19px; font-weight:700; cursor:pointer;
+    touch-action:manipulation;
+  }
+  #nextBtn:active { transform:scale(.95); }
+  .confetti { position:fixed; top:-20px; width:10px; height:14px; border-radius:3px; pointer-events:none; z-index:50; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Arrow Maze</span>
+  <span class="left"><b id="count">0</b> left</span>
+  <button id="newBtn">&#8635; New</button>
+</header>
+<div id="stage"><div id="board"></div></div>
+<div id="overlay">
+  <div class="msg">Cleared!</div>
+  <div class="sub" id="statLine"></div>
+  <button id="nextBtn">Next shape</button>
+</div>
+
+<script>
+"use strict";
+// dirs: 0 up, 1 right, 2 down, 3 left — glyph points up, rotated dir*90
+const DIRS = [{dx:0,dy:-1},{dx:1,dy:0},{dx:0,dy:1},{dx:-1,dy:0}];
+const ARROW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2.5 L20 12.5 H15.4 V21 H8.6 V12.5 H4 Z"/></svg>';
+
+const board = document.getElementById('board');
+const countEl = document.getElementById('count');
+const overlay = document.getElementById('overlay');
+const statLine = document.getElementById('statLine');
+
+let cols = 0, rows = 0, cell = 32;
+let grid = new Map();          // key -> arrow
+let arrows = [];
+let left = 0, taps = 0, gameOver = false, hueBase = 0;
+
+const key = (x, y) => y * 1000 + x;
+const rnd = n => Math.floor(Math.random() * n);
+
+/* ---------- shapes ---------- */
+
+function pointInPoly(pts, u, v) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > v) !== (yj > v) && u < (xj - xi) * (v - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function ngonPts(n, r, startAng, innerR) {
+  const pts = [];
+  const count = innerR ? n * 2 : n;
+  for (let k = 0; k < count; k++) {
+    const ang = startAng + k * 2 * Math.PI / count;
+    const rr = (innerR && k % 2) ? innerR : r;
+    pts.push([rr * Math.cos(ang), rr * Math.sin(ang)]);
+  }
+  return pts;
+}
+const starPts = ngonPts(5, 1.08, -Math.PI / 2, 0.52);
+const hexPts = ngonPts(6, 1.02, -Math.PI / 2);
+
+const SHAPES = [
+  { n:13, f:(u,v) => u*u + v*v <= 1.02 },                                   // circle
+  { n:13, f:(u,v) => Math.abs(u) + Math.abs(v) <= 1.06 },                   // diamond
+  { n:15, f:(u,v) => {                                                      // heart
+      const x = u * 1.35, y = 0.12 - v * 1.3;
+      const a = x*x + y*y - 1;
+      return a*a*a - x*x*y*y*y <= 0;
+    } },
+  { n:15, f:(u,v) => pointInPoly(starPts, u, v) },                          // star
+  { n:13, f:(u,v) => Math.abs(u) <= 0.36 || Math.abs(v) <= 0.36 },          // plus
+  { n:13, f:(u,v) => pointInPoly(hexPts, u, v) },                           // hexagon
+  { n:14, f:(u,v) => u*u + v*v <= 1 && (u-0.55)*(u-0.55) + v*v > 0.64 },    // crescent
+];
+
+function rasterize(shape) {
+  const n = shape.n, cells = [];
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++) {
+      const u = ((i + 0.5) / n) * 2 - 1, v = ((j + 0.5) / n) * 2 - 1;
+      if (shape.f(u, v)) cells.push([i, j]);
+    }
+  return cells;
+}
+
+// random symmetric blob via cellular-automata smoothing
+function blobCells() {
+  const n = 13;
+  let g = Array.from({length:n}, () => new Array(n).fill(0));
+  const half = Math.floor((n - 1) / 2);
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i <= half; i++)
+      g[j][i] = g[j][n-1-i] = Math.random() < 0.56 ? 1 : 0;
+  for (let it = 0; it < 4; it++) {
+    const ng = g.map(r => r.slice());
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        let c = 0;
+        for (let dj = -1; dj <= 1; dj++)
+          for (let di = -1; di <= 1; di++) {
+            const x = i + di, y = j + dj;
+            if (x >= 0 && x < n && y >= 0 && y < n) c += g[y][x];
+          }
+        ng[j][i] = c >= 5 ? 1 : 0;
+      }
+    g = ng;
+  }
+  const cells = [];
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++)
+      if (g[j][i]) cells.push([i, j]);
+  return cells;
+}
+
+function largestComponent(cells) {
+  const set = new Set(cells.map(([x,y]) => key(x,y)));
+  const seen = new Set();
+  let best = [];
+  for (const [x, y] of cells) {
+    const k0 = key(x, y);
+    if (seen.has(k0)) continue;
+    const comp = [], stack = [[x, y]];
+    seen.add(k0);
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      comp.push([cx, cy]);
+      for (const {dx, dy} of DIRS) {
+        const nk = key(cx + dx, cy + dy);
+        if (set.has(nk) && !seen.has(nk)) { seen.add(nk); stack.push([cx + dx, cy + dy]); }
+      }
+    }
+    if (comp.length > best.length) best = comp;
+  }
+  return best;
+}
+
+function crop(cells) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of cells) {
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  return {
+    cols: maxX - minX + 1,
+    rows: maxY - minY + 1,
+    cells: cells.map(([x, y]) => [x - minX, y - minY]),
+  };
+}
+
+/* ---------- solvable direction assignment ----------
+   Build in reverse removal order: each arrow gets a direction whose ray
+   is clear of all arrows placed so far. Since removing an arrow can only
+   free paths (never block them), any player order stays solvable. */
+function assignDirections(cells) {
+  const remaining = new Set(cells.map(([x, y]) => key(x, y)));
+  const cellOf = new Map(cells.map(([x, y]) => [key(x, y), [x, y]]));
+  const dirOf = new Map();
+  while (remaining.size) {
+    const options = [];
+    for (const k of remaining) {
+      const [x, y] = cellOf.get(k);
+      const clear = [];
+      for (let d = 0; d < 4; d++) {
+        const {dx, dy} = DIRS[d];
+        let cx = x + dx, cy = y + dy, ok = true;
+        while (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+          if (remaining.has(key(cx, cy)) && key(cx, cy) !== k) { ok = false; break; }
+          cx += dx; cy += dy;
+        }
+        if (ok) clear.push(d);
+      }
+      if (clear.length) options.push([k, clear]);
+    }
+    const [k, clear] = options[rnd(options.length)];
+    dirOf.set(k, clear[rnd(clear.length)]);
+    remaining.delete(k);
+  }
+  return dirOf;
+}
+
+/* ---------- game ---------- */
+
+function newGame() {
+  overlay.classList.remove('show');
+  board.innerHTML = '';
+  grid = new Map(); arrows = []; taps = 0; gameOver = false;
+  hueBase = rnd(360);
+
+  let cells = [];
+  for (let tries = 0; tries < 20 && cells.length < 30; tries++) {
+    const raw = Math.random() < 0.3 ? blobCells() : rasterize(SHAPES[rnd(SHAPES.length)]);
+    cells = largestComponent(raw);
+  }
+  const shape = crop(cells);
+  cols = shape.cols; rows = shape.rows;
+
+  const dirOf = assignDirections(shape.cells);
+  for (const [x, y] of shape.cells) {
+    const a = { x, y, dir: dirOf.get(key(x, y)), el: document.createElement('div') };
+    a.el.className = 'tile';
+    a.el.innerHTML = ARROW_SVG;
+    a.el.firstChild.style.transform = `rotate(${a.dir * 90}deg)`;
+    const hue = (hueBase + (x + y) / (cols + rows) * 300) % 360;
+    a.el.style.background = `hsl(${hue} 68% 60%)`;
+    a.el.addEventListener('touchstart', e => {
+      e.preventDefault();
+      tap(a);
+    });
+    grid.set(key(x, y), a);
+    arrows.push(a);
+    board.appendChild(a.el);
+  }
+  left = arrows.length;
+  countEl.textContent = left;
+  layout();
+
+  // staggered pop-in
+  for (const a of arrows) {
+    a.animating = true;
+    const anim = a.el.animate(
+      [{ transform:'scale(0)', opacity:0 }, { transform:'scale(1)', opacity:1 }],
+      { duration:260, delay:(a.x + a.y) * 16, easing:'cubic-bezier(.34,1.56,.64,1)', fill:'backwards' });
+    anim.onfinish = () => { a.animating = false; };
+  }
+}
+
+function layout() {
+  const stage = document.getElementById('stage');
+  let w = stage.clientWidth - 20, h = stage.clientHeight - 20;
+  if (w <= 0 || h <= 0) {
+    w = window.innerWidth - 20;
+    h = window.innerHeight - 56 - 20;
+  }
+  cell = Math.max(18, Math.min(72, Math.floor(Math.min(w / cols, h / rows))));
+  board.style.width = cols * cell + 'px';
+  board.style.height = rows * cell + 'px';
+  const pad = Math.max(2, Math.round(cell * 0.05));
+  for (const a of arrows) {
+    a.el.style.width = (cell - pad * 2) + 'px';
+    a.el.style.height = (cell - pad * 2) + 'px';
+    a.el.style.left = (a.x * cell + pad) + 'px';
+    a.el.style.top = (a.y * cell + pad) + 'px';
+  }
+}
+
+function tap(a) {
+  if (gameOver || a.animating || !grid.has(key(a.x, a.y))) return;
+  taps++;
+  const {dx, dy} = DIRS[a.dir];
+  let cx = a.x + dx, cy = a.y + dy, free = 0, blocker = null;
+  while (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+    blocker = grid.get(key(cx, cy));
+    if (blocker) break;
+    free++; cx += dx; cy += dy;
+  }
+  if (!blocker) fly(a, free);
+  else bounce(a, free, blocker);
+}
+
+function fly(a, free) {
+  grid.delete(key(a.x, a.y));
+  a.el.classList.add('gone');
+  left--; countEl.textContent = left;
+  const {dx, dy} = DIRS[a.dir];
+  const d = (free + Math.max(cols, rows) + 4) * cell;
+  a.el.style.willChange = 'transform, opacity';
+  const anim = a.el.animate(
+    [{ transform:'translate(0,0)', opacity:1 },
+     { transform:`translate(${dx * d}px, ${dy * d}px)`, opacity:0.4 }],
+    { duration:380, easing:'cubic-bezier(.45,0,1,1)', fill:'forwards' });
+  anim.onfinish = () => { a.el.style.willChange = ''; a.el.remove(); };
+  if (left === 0) win();
+}
+
+function bounce(a, free, blocker) {
+  a.animating = true;
+  const {dx, dy} = DIRS[a.dir];
+  const d = free * cell + cell * 0.22;   // slide up to blocker, nudge, return
+  const dur = 240 + free * 70;
+  a.el.style.willChange = 'transform, opacity';
+  const anim = a.el.animate(
+    [{ transform:'translate(0,0)' },
+     { transform:`translate(${dx * d}px, ${dy * d}px)`, offset:0.55, easing:'cubic-bezier(0,0,.6,1)' },
+     { transform:'translate(0,0)' }],
+    { duration:dur, easing:'ease-out' });
+  anim.onfinish = () => { a.el.style.willChange = ''; a.animating = false; };
+  // knock the blocker a touch
+  blocker.el.animate(
+    [{ transform:'translate(0,0)' },
+     { transform:`translate(${dx * cell * 0.12}px, ${dy * cell * 0.12}px)` },
+     { transform:'translate(0,0)' }],
+    { duration:180, delay:dur * 0.45, easing:'ease-out' });
+}
+
+function win() {
+  gameOver = true;
+  statLine.textContent = `${taps} taps`;
+  setTimeout(() => overlay.classList.add('show'), 350);
+  confetti();
+}
+
+function confetti() {
+  for (let i = 0; i < 70; i++) {
+    const c = document.createElement('div');
+    c.className = 'confetti';
+    c.style.left = Math.random() * 100 + 'vw';
+    c.style.background = `hsl(${rnd(360)} 80% 60%)`;
+    document.body.appendChild(c);
+    c.animate(
+      [{ transform:'translateY(0) rotate(0deg)', opacity:1 },
+       { transform:`translateY(${innerHeight + 60}px) rotate(${540 + rnd(720)}deg) translateX(${rnd(120) - 60}px)`, opacity:0.7 }],
+      { duration:1400 + rnd(1400), delay:rnd(500), easing:'cubic-bezier(.3,.4,.6,1)', fill:'forwards' }
+    ).onfinish = () => c.remove();
+  }
+}
+
+document.getElementById('newBtn').addEventListener('click', newGame);
+document.getElementById('nextBtn').addEventListener('click', newGame);
+window.addEventListener('resize', layout);
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+newGame();
+</script>
+</body>
+</html>

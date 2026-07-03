@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14141f">
+<title>Amaze</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#14141f; color:#dfe3f0;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
+  }
+  #levelLabel { font-weight:800; font-size:20px; color:#aab2d0; letter-spacing:1px; }
+  #lives { display:flex; gap:7px; font-size:21px; }
+  #lives span { transition:opacity .35s, filter .35s, transform .35s; }
+  #lives span.lost { opacity:.22; filter:grayscale(1); transform:scale(.85); }
+  #restartBtn {
+    background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
+    border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
+    touch-action:manipulation;
+  }
+  #restartBtn:active { transform:scale(.94); }
+  #stage { flex:1; position:relative; overflow:hidden; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,14,.6); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .35s;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #ovCard {
+    background:#20212f; border-radius:22px; padding:34px 44px;
+    box-shadow:0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+  }
+  #ovEmoji { font-size:64px; line-height:1; }
+  #ovMsg { font-size:30px; font-weight:800; color:#fff; }
+  #ovSub { font-size:15px; color:#9aa1bd; }
+  #ovBtn {
+    margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation;
+  }
+  #ovBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
+</style>
+</head>
+<body>
+<header>
+  <div id="lives"><span>&#10084;&#65039;</span><span>&#10084;&#65039;</span><span>&#10084;&#65039;</span></div>
+  <div id="levelLabel">Level 1</div>
+  <button id="restartBtn">&#8635;</button>
+</header>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="overlay">
+  <div id="ovCard">
+    <div id="ovEmoji">&#128516;</div>
+    <div id="ovMsg">One Pass Win!</div>
+    <div id="ovSub"></div>
+    <button id="ovBtn">Next Level</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+const DIRS = [{dx:0,dy:-1},{dx:1,dy:0},{dx:0,dy:1},{dx:-1,dy:0}];
+const COLORS = { bump:'#ff4d57', dot:'rgba(255,255,255,.13)' };
+const PALETTE = ['#ff6b6b','#ffa94d','#ffd43b','#69db7c','#38d9a9','#4dabf7','#748ffc','#da77f2','#f783ac'];
+function lighten(hex, t) {
+  const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+  const m = c => Math.round(c + (255 - c) * t);
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const stage = document.getElementById('stage');
+const overlay = document.getElementById('overlay');
+const ovEmoji = document.getElementById('ovEmoji');
+const ovMsg = document.getElementById('ovMsg');
+const ovSub = document.getElementById('ovSub');
+const ovBtn = document.getElementById('ovBtn');
+const livesEl = document.getElementById('lives');
+
+let level = Math.max(1, parseInt(localStorage.getItem('amazeLevel')) || 1);
+let cols, rows, snakes, occ, cell, bx, by;
+let lives, taps, startTime, remaining, failed = false, won = false;
+let animating = new Set();
+let rafId = 0;
+
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- generation ----------
+   Snakes are placed in reverse removal order: each new snake's exit ray
+   (straight ahead of its arrowhead to the board edge) must be clear of
+   snakes already placed, and its body may not cross its own ray.
+   Removing a snake only ever frees cells, so no tap order can deadlock. */
+function generate(lv) {
+  cols = Math.min(15, 7 + Math.floor((lv - 1) * 0.7));
+  rows = Math.min(21, 9 + (lv - 1));
+  // several seeded attempts, keep the densest board (still deterministic per level)
+  let best = null;
+  for (let att = 0; att < 5; att++) {
+    const r = genAttempt(lv, att);
+    if (!best || r.free < best.free) best = r;
+    if (best.free <= cols * rows * 0.08) break;
+  }
+  occ = best.occ; snakes = best.snakes;
+
+  // color the lines so no two touching snakes share a color
+  const crng = mulberry32(lv * 69069 + 7);
+  const offset = (crng() * PALETTE.length) | 0;
+  const idx = (x, y) => y * cols + x;
+  const neighbors = snakes.map(() => new Set());
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < cols; x++) {
+      const a = occ[idx(x, y)];
+      if (a === -1) continue;
+      for (const [nx, ny] of [[x + 1, y], [x, y + 1]]) {
+        if (nx >= cols || ny >= rows) continue;
+        const b = occ[idx(nx, ny)];
+        if (b !== -1 && b !== a) { neighbors[a].add(b); neighbors[b].add(a); }
+      }
+    }
+  snakes.forEach((s, i) => {
+    const used = new Set([...neighbors[i]].filter(j => j < i).map(j => snakes[j].colorIdx));
+    let ci = (offset + i) % PALETTE.length;
+    for (let k = 0; k < PALETTE.length; k++) {
+      const c = (offset + i + k) % PALETTE.length;
+      if (!used.has(c)) { ci = c; break; }
+    }
+    s.colorIdx = ci;
+    s.color = PALETTE[ci];
+    s.bright = lighten(PALETTE[ci], 0.45);
+  });
+}
+
+function genAttempt(lv, salt) {
+  const rng = mulberry32(lv * 1013904223 + salt * 7919 + 424242);
+  const maxLen = Math.min(30, 5 + lv * 2);
+  const idx = (x, y) => y * cols + x;
+  const inb = (x, y) => x >= 0 && x < cols && y >= 0 && y < rows;
+  const occ = new Int16Array(cols * rows).fill(-1);
+  const snakes = [];
+  let free = cols * rows;
+
+  // repeated passes over the remaining free cells pack the board tightly
+  for (let pass = 0; pass < 6 && free > 0; pass++) {
+    const freeCells = [];
+    for (let y = 0; y < rows; y++)
+      for (let x = 0; x < cols; x++)
+        if (occ[idx(x, y)] === -1) freeCells.push([x, y]);
+    for (let i = freeCells.length - 1; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      [freeCells[i], freeCells[j]] = [freeCells[j], freeCells[i]];
+    }
+    let placedAny = false;
+    for (const [hx, hy] of freeCells) {
+    if (occ[idx(hx, hy)] !== -1) continue;
+    const dirOrder = [0, 1, 2, 3].sort(() => rng() - 0.5);
+    let dir = -1, rayCells = null;
+    for (const d of dirOrder) {
+      const {dx, dy} = DIRS[d];
+      // body must start directly behind the head so the arrowhead sits on a straight segment
+      if (!inb(hx - dx, hy - dy) || occ[idx(hx - dx, hy - dy)] !== -1) continue;
+      let cx = hx + dx, cy = hy + dy, ok = true;
+      const ray = new Set();
+      while (inb(cx, cy)) {
+        if (occ[idx(cx, cy)] !== -1) { ok = false; break; }
+        ray.add(idx(cx, cy));
+        cx += dx; cy += dy;
+      }
+      if (ok) { dir = d; rayCells = ray; break; }
+    }
+    if (dir < 0) continue;
+
+    const path = [[hx, hy], [hx - DIRS[dir].dx, hy - DIRS[dir].dy]];
+    const used = new Set([idx(hx, hy), idx(path[1][0], path[1][1])]);
+    const targetLen = 2 + ((rng() * maxLen) | 0);
+    let [cx, cy] = path[1];
+    let lastD = dir; // direction of travel while growing backward is opposite; track step dir cell->cell
+    lastD = (dir + 2) % 4;
+    while (path.length < targetLen) {
+      const opts = [];
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + DIRS[d].dx, ny = cy + DIRS[d].dy;
+        if (!inb(nx, ny)) continue;
+        const k = idx(nx, ny);
+        if (occ[k] !== -1 || used.has(k) || rayCells.has(k)) continue;
+        opts.push(d);
+      }
+      if (!opts.length) break;
+      let d;
+      if (opts.includes(lastD) && rng() < 0.55) d = lastD;      // bias to straight runs
+      else d = opts[(rng() * opts.length) | 0];
+      cx += DIRS[d].dx; cy += DIRS[d].dy;
+      path.push([cx, cy]);
+      used.add(idx(cx, cy));
+      lastD = d;
+    }
+    const id = snakes.length;
+    for (const [px, py] of path) occ[idx(px, py)] = id;
+    free -= path.length;
+    snakes.push({ path, dir, id, state:'idle', anim:null });
+    placedAny = true;
+    }
+    if (!placedAny) break;
+  }
+  return { occ, snakes, free };
+}
+
+/* ---------- geometry ---------- */
+
+function layout() {
+  let w = stage.clientWidth, h = stage.clientHeight;
+  if (w === 0 || h === 0) {
+    w = window.innerWidth;
+    h = window.innerHeight - 56;
+  }
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = w * dpr; cv.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cell = Math.max(14, Math.min(48, Math.floor(Math.min((w - 20) / cols, (h - 20) / rows))));
+  bx = (w - cols * cell) / 2;
+  by = (h - rows * cell) / 2;
+  for (const s of snakes) buildTrack(s);
+  draw();
+}
+
+const cx_ = x => bx + (x + 0.5) * cell;
+const cy_ = y => by + (y + 0.5) * cell;
+
+// track: polyline from a far off-screen exit point, through the head, along the body to the tail.
+// the snake is the window [a, a+len] of arc length along this track; sliding out = a -> 0.
+function buildTrack(s) {
+  const verts = [];
+  const {dx, dy} = DIRS[s.dir];
+  const [hx, hy] = s.path[0];
+  const cellsToEdge = dx === 1 ? cols - hx : dx === -1 ? hx + 1 : dy === 1 ? rows - hy : hy + 1;
+  s.len = 0;
+  for (let i = 1; i < s.path.length; i++) s.len += cell; // grid steps are uniform
+  const rayPx = (cellsToEdge + 3) * cell + s.len + Math.max(bx, by) + cell * 2;
+  verts.push([cx_(hx) + dx * rayPx, cy_(hy) + dy * rayPx]);
+  verts.push([cx_(hx), cy_(hy)]);
+  for (let i = 1; i < s.path.length - 1; i++) {
+    const [ax, ay] = s.path[i - 1], [bx2, by2] = s.path[i], [cx2, cy2] = s.path[i + 1];
+    if ((bx2 - ax) !== (cx2 - bx2) || (by2 - ay) !== (cy2 - by2))
+      verts.push([cx_(bx2), cy_(by2)]);
+  }
+  const [tx, ty] = s.path[s.path.length - 1];
+  if (s.path.length > 1) verts.push([cx_(tx), cy_(ty)]);
+  // cumulative arc length
+  const cum = [0];
+  for (let i = 1; i < verts.length; i++)
+    cum.push(cum[i - 1] + Math.hypot(verts[i][0] - verts[i - 1][0], verts[i][1] - verts[i - 1][1]));
+  s.track = verts; s.cum = cum; s.a0 = cum[1]; // head tip sits at the first real vertex
+}
+
+function trackPoint(s, d) {
+  const {track, cum} = s;
+  if (d <= 0) d = 0;
+  if (d >= cum[cum.length - 1]) d = cum[cum.length - 1];
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < d) i++;
+  const t = (d - cum[i - 1]) / (cum[i] - cum[i - 1] || 1);
+  return [
+    track[i - 1][0] + (track[i][0] - track[i - 1][0]) * t,
+    track[i - 1][1] + (track[i][1] - track[i - 1][1]) * t,
+    (track[i][0] - track[i - 1][0]) / (cum[i] - cum[i - 1] || 1),
+    (track[i][1] - track[i - 1][1]) / (cum[i] - cum[i - 1] || 1),
+  ];
+}
+
+/* ---------- drawing ---------- */
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  // dot grid
+  ctx.fillStyle = COLORS.dot;
+  const r = Math.max(1.2, cell * 0.055);
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < cols; x++) {
+      ctx.beginPath();
+      ctx.arc(cx_(x), cy_(y), r, 0, 7);
+      ctx.fill();
+    }
+  for (const s of snakes) if (s.state !== 'gone') drawSnake(s);
+}
+
+function drawSnake(s) {
+  const a = s.state === 'idle' ? s.a0 : s.animA;
+  const color = s.state === 'exit' ? s.bright : s.state === 'bump' ? COLORS.bump : s.color;
+  if (s.state === 'exit') { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.55; }
+  const lw = Math.max(4, cell * 0.3);
+  const headInset = cell * 0.42;
+  // body polyline from just behind the arrowhead to the tail
+  const pts = [trackPoint(s, a + headInset)];
+  for (let i = 1; i < s.track.length; i++)
+    if (s.cum[i] > a + headInset && s.cum[i] < a + s.len) pts.push(s.track[i]);
+  pts.push(trackPoint(s, a + s.len));
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lw;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+  // arrowhead at the tip, pointing along direction of travel (decreasing arc length)
+  const [px, py, tdx, tdy] = trackPoint(s, a);
+  const ux = -tdx, uy = -tdy;               // travel direction
+  const size = cell * 0.52;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(px + ux * size * 0.62, py + uy * size * 0.62);
+  ctx.lineTo(px - uy * size * 0.55 - ux * size * 0.38, py + ux * size * 0.55 - uy * size * 0.38);
+  ctx.lineTo(px + uy * size * 0.55 - ux * size * 0.38, py - ux * size * 0.55 - uy * size * 0.38);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+/* ---------- animation ---------- */
+
+function tick(now) {
+  let active = false;
+  for (const s of [...animating]) {
+    const a = s.anim;
+    const t = (now - a.t0) / a.dur;
+    if (s.state === 'exit') {
+      if (t >= 1) { s.state = 'gone'; animating.delete(s); checkWin(); }
+      else { s.animA = s.a0 * (1 - easeInQuad(t)); active = true; }
+    } else if (s.state === 'bump') {
+      if (t >= 1) {
+        s.state = 'idle'; animating.delete(s);
+        if (lives === 0 && !failed) fail();
+      } else {
+        s.animA = s.a0 - a.dist * Math.sin(Math.PI * t);
+        active = true;
+      }
+    }
+  }
+  draw();
+  if (active || animating.size) rafId = requestAnimationFrame(tick);
+  else rafId = 0;
+}
+const easeInQuad = t => t * t;
+
+function startAnim() { if (!rafId) rafId = requestAnimationFrame(tick); }
+
+/* ---------- game flow ---------- */
+
+function tap(s) {
+  if (s.state !== 'idle' || won || failed) return;
+  taps++;
+  const {dx, dy} = DIRS[s.dir];
+  const idx = (x, y) => y * cols + x;
+  let [cx, cy] = s.path[0];
+  cx += dx; cy += dy;
+  let freeCells = 0, blocked = false;
+  while (cx >= 0 && cx < cols && cy >= 0 && cy < rows) {
+    if (occ[idx(cx, cy)] !== -1) { blocked = true; break; }
+    freeCells++; cx += dx; cy += dy;
+  }
+  if (!blocked) {
+    for (const [px, py] of s.path) occ[idx(px, py)] = -1;
+    remaining--;
+    s.state = 'exit';
+    s.animA = s.a0;
+    s.anim = { t0: performance.now(), dur: Math.max(350, s.a0 / (cell * 22) * 1000) };
+    animating.add(s);
+    startAnim();
+  } else {
+    lives = Math.max(0, lives - 1);
+    updateLives();
+    s.state = 'bump';
+    s.animA = s.a0;
+    s.anim = { t0: performance.now(), dur: 330 + freeCells * 45, dist: freeCells * cell + cell * 0.4 };
+    animating.add(s);
+    startAnim();
+  }
+}
+
+function updateLives() {
+  [...livesEl.children].forEach((el, i) => el.classList.toggle('lost', i >= lives));
+}
+
+function fail() {
+  failed = true;
+  ovEmoji.textContent = '\u{1F494}';
+  ovMsg.textContent = 'Out of hearts!';
+  ovSub.textContent = `Level ${level} · same maze, try again`;
+  ovBtn.textContent = 'Retry';
+  ovBtn.onclick = newLevel;
+  setTimeout(() => overlay.classList.add('show'), 500);
+}
+
+function checkWin() {
+  if (remaining === 0 && !failed && !won) {
+    won = true;
+    const secs = Math.round((performance.now() - startTime) / 1000);
+    const perfect = lives === 3;
+    ovEmoji.textContent = perfect ? '\u{1F604}' : '\u{1F389}';
+    ovMsg.textContent = perfect ? 'One Pass Win!' : 'Cleared!';
+    ovSub.textContent = `Level ${level} · ${taps} taps · ${secs}s`;
+    ovBtn.textContent = 'Next Level';
+    ovBtn.onclick = () => { level++; localStorage.setItem('amazeLevel', level); newLevel(); };
+    setTimeout(() => overlay.classList.add('show'), 420);
+  }
+}
+
+function newLevel() {
+  overlay.classList.remove('show');
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+  animating.clear();
+  lives = 3; taps = 0; failed = false; won = false;
+  updateLives();
+  document.getElementById('levelLabel').textContent = 'Level ' + level;
+  generate(level);
+  remaining = snakes.length;
+  startTime = performance.now();
+  layout();
+}
+
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = cv.getBoundingClientRect();
+  const x = Math.floor((touch.clientX - rect.left - bx) / cell);
+  const y = Math.floor((touch.clientY - rect.top - by) / cell);
+  if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+  const id = occ[y * cols + x];
+  if (id !== -1) tap(snakes[id]);
+});
+
+document.getElementById('restartBtn').addEventListener('click', newLevel);
+window.addEventListener('resize', layout);
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+newLevel();
+</script>
+</body>
+</html>
