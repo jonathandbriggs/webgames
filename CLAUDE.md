@@ -59,7 +59,7 @@ Both games use fluid layouts:
 - Both disable default tap highlight and long-press menu
 - Both use `touch-action:manipulation` for responsive input
 - Keep pointer event handling consistent: standardize on which event fires the tap (currently mixed: Amaze uses `pointerdown`, Arrow uses `pointerup`)
-- When adding new games, follow the same folder structure (self-contained `.html` file in repo root, linked from `index.html`)
+- When adding new games, follow the same folder structure (self-contained `.html` file in `public/`, linked from `public/index.html`)
 
 **State Persistence**: Use `localStorage` to save progress (e.g., `localStorage.getItem('amazeLevel')`). Always namespace keys to avoid collisions.
 
@@ -67,7 +67,7 @@ Both games use fluid layouts:
 
 ## Common Tasks
 
-- **Add a new game**: Create `game-name.html` as a self-contained file, add a link in `index.html`
+- **Add a new game**: Create `public/game-name.html` as a self-contained file, add a link in `public/index.html`
 - **Tweak colors/sizes**: Edit the `<style>` block at the top of each file
 - **Change difficulty/generation**: Adjust the `PALETTE`, `DIRS`, or generation parameters in the `<script>` section
 - **Fix tap responsiveness**: Check pointer event listener (which event type, event.preventDefault/stopPropagation if needed) and confirm `touch-action` is set to `manipulation`
