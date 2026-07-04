@@ -5,7 +5,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#14141f">
-<title>Hex Clear</title>
+<title>Hex Maze</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; overflow:hidden; }
@@ -73,7 +73,7 @@
 <body>
 <header>
   <a id="menuBtn" href="index.html">☰ Menu</a>
-  <span class="title">Hex Clear</span>
+  <span class="title">Hex Maze</span>
   <span class="left"><b id="count">0</b> left</span>
   <button id="newBtn">↻ New</button>
 </header>
@@ -110,6 +110,7 @@ let cell = 0; // hex radius in px, computed dynamically
 let grid = new Map();          // key -> arrow
 let arrows = [];
 let cols = 0, rows = 0;
+let rowsH = 5, colsH = 7; // hex layout dimensions, computed dynamically
 let left = 0, taps = 0, gameOver = false, hueBase = 0;
 
 const key = (q, r) => r * 2000 + q;
@@ -186,26 +187,16 @@ function blobCells(rowsH, colsH) {
     for (let c = 0; c <= halfC; c++) {
       g[r][c] = g[r][colsH-1-c] = Math.random() < 0.56 ? 1 : 0;
     }
-  // hex neighbors offsets by row parity
-  const off = [[[-1,-1],[-1,0],[0,-1]],
-               [ [-1,0],[0,-1],[0,0],
-                [0,0],[1,-1],[1,0]],
-               [[-1,0],[0,0],[0,1]],
-               [ [-1,0],[0,0],[0,1],
-                [0,1],[1,0],[1,1]],
-               [[0,0],[0,1],[1,1]],
-               [[0,1],[1,1],[1,0]]];
-
   for (let it = 0; it < 4; it++) {
     const ng = g.map(r => r.slice());
     for (let r = 0; r < rowsH; r++)
       for (let c = 0; c < colsH; c++) {
         let count = 0;
-        for (const [dc, dr] of off[r % 2]) {
-          const nc = c + dc, nr = r + dr;
+        for (const {dx, dy} of DIRS) {
+          const nc = c + dx, nr = r + dy;
           if (nc >= 0 && nc < colsH && nr >= 0 && nr < rowsH) count += g[nr][nc];
         }
-        ng[r][c] = count >= 5 ? 1 : 0;
+        ng[r][c] = count >= 4 ? 1 : (count === 3 ? g[r][c] : 0);
       }
     g = ng;
   }
@@ -294,7 +285,8 @@ function newGame() {
   let cells = [];
   for (let tries = 0; tries < 25 && cells.length < 40; tries++) {
     const raw = Math.random() < 0.3 ? blobCells(rowsH, colsH) : rasterize(SHAPES[rnd(SHAPES.length)], rowsH, colsH);
-    cells = largestComponent(raw);
+    const found = largestComponent(raw);
+    if (found.length > cells.length) cells = found;
   }
   const shape = crop(cells);
   cols = shape.cols; rows = shape.rows;
@@ -337,9 +329,9 @@ function newGame() {
 /* hexagonal pixel layout: flat-top with even rows shifted right */
 function hx(q, r) {
   // size in px
-  const s = cell * Math.SQRT3 / 2;   // horizontal half-width
+  const s = cell * Math.sqrt(3) / 2;   // horizontal half-width
   // vertical spacing between centers
-  const dy = cell * Math.SQRT3;       // full vertical step
+  const dy = cell * Math.sqrt(3);       // full vertical step
 
   let x = q * s;
   if (r % 2 === 0) x += s / 2;        // even rows shifted right
@@ -356,23 +348,37 @@ function layout() {
     h = window.innerHeight - 56 - 20;
   }
 
-  // choose hex radius to fit nicely
-  const s = cell * Math.SQRT3 / 2;   // horizontal half-width
-  const dy = cell * Math.SQRT3;      // vertical step
-  cell = Math.max(14, Math.min(65, Math.floor(Math.min(w / (cols + colsH) / 2.2, h / rows))));
+  // Measure the board's extent at a reference cell size, then scale to fit the stage.
+  const REF = 100;
+  cell = REF;
+  let minX = 0, maxX = REF, minY = 0, maxY = REF;
+  if (arrows.length) {
+    minX = minY = Infinity; maxX = maxY = -Infinity;
+    for (const a of arrows) {
+      const p = hx(a.q, a.r);
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x + REF);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y + REF);
+    }
+  }
+  const spanX = maxX - minX, spanY = maxY - minY;
 
-  board.style.width = ((cols + colsH - 1) * s + 'px');
-  board.style.height = (rows * dy + cell + 'px');
+  cell = Math.max(14, Math.min(65, Math.floor(Math.min(w / spanX, h / spanY) * REF)));
+  const scale = cell / REF;
+
+  board.style.width = w + 'px';
+  board.style.height = h + 'px';
 
   const padX = Math.max(4, Math.round(cell * 0.08));
   const padY = Math.max(4, Math.round(cell * 0.06));
+  const offX = (w - spanX * scale) / 2 - minX * scale;
+  const offY = (h - spanY * scale) / 2 - minY * scale;
 
   for (const a of arrows) {
-    const p = hx(a.q, a.r);
+    const p = hx(a.q, a.r); // recomputed at the final `cell`
     a.el.style.width = (cell - padX * 2) + 'px';
     a.el.style.height = (cell - padY * 2) + 'px';
-    a.el.style.left = ((p.x + cell / 3) + padX) + 'px';
-    a.el.style.top = ((p.y + padY)) + 'px';
+    a.el.style.left = (p.x + offX + padX) + 'px';
+    a.el.style.top = (p.y + offY + padY) + 'px';
   }
 }
 
@@ -465,8 +471,6 @@ document.getElementById('nextBtn').addEventListener('click', newGame);
 window.addEventListener('resize', layout);
 document.addEventListener('contextmenu', e => e.preventDefault());
 
-// Initial dimensions for first game generation
-rowsH = 5; colsH = 7;
 newGame();
 </script>
 
