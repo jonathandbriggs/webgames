@@ -8,7 +8,7 @@ step, no dependencies, no server-side code, no external assets. They live in
 
 | File | Game |
 |---|---|
-| `public/amaze-go.html` | Amaze GO remake — tap the tangled lines to slide them out |
+| `public/untangle.html` | Untangle — tap the tangled lines to slide them out |
 | `public/arrow-maze.html` | Arrow grid — tap tiles to fly them off a random shape |
 | `public/hex-maze.html` | Hex grid maze |
 

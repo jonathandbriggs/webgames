@@ -18,17 +18,17 @@ Each game follows a consistent pattern:
    - Movement/rays cast from one grid cell in cardinal directions
    - Solvability is guaranteed by building in reverse removal order (see "Generation" below)
 3. **Pointer Input**: Tap/click handling uses pointer events:
-   - **Amaze GO** (amaze-go.html): `pointerdown` on the canvas, retrieves grid position and calls `tap(snake)`
+   - **Untangle** (untangle.html): `pointerdown` on the canvas, retrieves grid position and calls `tap(snake)`
    - **Arrow Maze** (arrow-maze.html): `pointerup` on individual tiles, calls `tap(arrow)`
    - Both should use consistent responsiveness (`touch-action:manipulation`, `-webkit-tap-highlight-color:transparent`)
 4. **Animation & Rendering**:
-   - **Amaze GO**: Canvas-based with requestAnimationFrame, snakes slide along a polyline track during exit and bump animations
+   - **Untangle**: Canvas-based with requestAnimationFrame, snakes slide along a polyline track during exit and bump animations
    - **Arrow Maze**: DOM-based with Web Animations API, tiles scale/fade/translate during fly and bounce animations
 5. **Procedural Generation**: Both games generate solvable puzzles with deterministic seeding (if needed) and attempt strategies to maximize board density
 
 ### Key Game Mechanics
 
-**Amaze GO** (`amaze-go.html`, ~450 LOC):
+**Untangle** (`untangle.html`, ~450 LOC):
 - Player taps snakes to remove them; snakes slide out if their forward ray is clear
 - If forward ray is blocked, the snake bumps backward
 - 3 hearts, lose one per bump, win when all snakes are removed
@@ -48,7 +48,7 @@ Both games use fluid layouts:
 - Canvas or board container sized to fill viewport minus header/margins
 - `cell` size computed per window size and grid dimensions
 - `layout()` called on resize and after generation/state change
-- High-DPI support via `devicePixelRatio` (Amaze) or handled by browser (Arrow Maze)
+- High-DPI support via `devicePixelRatio` (Untangle) or handled by browser (Arrow Maze)
 
 ## Development Notes
 
@@ -58,12 +58,12 @@ Both games use fluid layouts:
 - Both use dark backgrounds with light text
 - Both disable default tap highlight and long-press menu
 - Both use `touch-action:manipulation` for responsive input
-- Keep pointer event handling consistent: standardize on which event fires the tap (currently mixed: Amaze uses `pointerdown`, Arrow uses `pointerup`)
+- Keep pointer event handling consistent: standardize on which event fires the tap (currently mixed: Untangle uses `pointerdown`, Arrow uses `pointerup`)
 - When adding new games, follow the same folder structure (self-contained `.html` file in `public/`, linked from `public/index.html`)
 
-**State Persistence**: Use `localStorage` to save progress (e.g., `localStorage.getItem('amazeLevel')`). Always namespace keys to avoid collisions.
+**State Persistence**: Use `localStorage` to save progress (e.g., `localStorage.getItem('untangleLevel')`). Always namespace keys to avoid collisions.
 
-**Performance**: Canvas drawing happens every frame in Amaze; DOM animations in Arrow Maze are GPU-accelerated. Avoid adding heavy computations inside `tick()` or animation callbacks.
+**Performance**: Canvas drawing happens every frame in Untangle; DOM animations in Arrow Maze are GPU-accelerated. Avoid adding heavy computations inside `tick()` or animation callbacks.
 
 ## Common Tasks
 

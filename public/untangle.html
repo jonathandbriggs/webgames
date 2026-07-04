@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#14141f">
-<title>Amaze</title>
+<title>Untangle</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; overflow:hidden; }
@@ -91,7 +91,7 @@ const ovSub = document.getElementById('ovSub');
 const ovBtn = document.getElementById('ovBtn');
 const livesEl = document.getElementById('lives');
 
-let level = Math.max(1, parseInt(localStorage.getItem('amazeLevel')) || 1);
+let level = Math.max(1, parseInt(localStorage.getItem('untangleLevel')) || 1);
 let cols, rows, snakes, occ, cell, bx, by;
 let lives, taps, startTime, remaining, failed = false, won = false;
 let animating = new Set();
@@ -420,7 +420,7 @@ function checkWin() {
     ovMsg.textContent = perfect ? 'One Pass Win!' : 'Cleared!';
     ovSub.textContent = `Level ${level} · ${taps} taps · ${secs}s`;
     ovBtn.textContent = 'Next Level';
-    ovBtn.onclick = () => { level++; localStorage.setItem('amazeLevel', level); newLevel(); };
+    ovBtn.onclick = () => { level++; localStorage.setItem('untangleLevel', level); newLevel(); };
     setTimeout(() => overlay.classList.add('show'), 420);
   }
 }
