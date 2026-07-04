@@ -1,15 +1,15 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#12121a">
-<title>Hex Arrow Maze</title>
+<meta name="theme-color" content="#14141f">
+<title>Hex Clear</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; overflow:hidden; }
   body {
-    background:#12121a; color:#eee;
+    background:#14141f; color:#dfe3f0;
     font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
     user-select:none; -webkit-user-select:none; touch-action:manipulation;
     display:flex; flex-direction:column;
@@ -17,17 +17,17 @@
   header {
     height:56px; flex:0 0 auto;
     display:flex; align-items:center; justify-content:space-between;
-    padding:0 16px;
+    padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
   }
   header .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
   header .left { font-size:15px; color:#aaa; }
-  header .left b { color:#fff; font-size:18px; }
+  header .left b { color:#dfe3f0; font-size:18px; }
   #newBtn {
-    background:#26263a; color:#eee; border:0; border-radius:10px;
-    padding:8px 14px; font-size:15px; font-weight:600; cursor:pointer;
-    touch-action:manipulation;
+    background:#e0762e; color:#fff; border:0; border-radius:10px;
+    padding:8px 16px; font-size:15px; font-weight:700; cursor:pointer;
+    box-shadow:0 3px 0 #b55a1c; touch-action:manipulation;
   }
-  #newBtn:active { transform:scale(.94); }
+  #newBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #b55a1c; }
   #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
   #board { position:relative; touch-action:manipulation; }
   .tile {
@@ -40,34 +40,43 @@
   .tile svg { width:62%; height:62%; fill:rgba(255,255,255,.92); pointer-events:none; }
   .tile.gone { pointer-events:none; }
   #overlay {
-    position:fixed; inset:0; display:flex; flex-direction:column; gap:18px;
-    align-items:center; justify-content:center;
-    background:rgba(10,10,16,.78); backdrop-filter:blur(3px);
-    opacity:0; pointer-events:none; transition:opacity .3s;
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,14,.6); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .35s;
   }
   #overlay.show { opacity:1; pointer-events:auto; }
-  #overlay .msg { font-size:42px; font-weight:800; }
-  #overlay .sub { color:#999; font-size:15px; }
-  #nextBtn {
-    background:#4d96ff; color:#fff; border:0; border-radius:14px;
-    padding:14px 34px; font-size:19px; font-weight:700; cursor:pointer;
-    touch-action:manipulation;
+  #ovCard {
+    background:#20212f; border-radius:22px; padding:34px 44px;
+    box-shadow:0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex; flex-direction:column; align-items:center; gap:12px;
   }
-  #nextBtn:active { transform:scale(.95); }
+  #ovEmoji { font-size:64px; line-height:1; }
+  #ovMsg { font-size:30px; font-weight:800; color:#fff; }
+  #ovSub { font-size:15px; color:#9aa1bd; }
+  #nextBtn {
+    margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation;
+  }
+  #nextBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
   .confetti { position:fixed; top:-20px; width:10px; height:14px; border-radius:3px; pointer-events:none; z-index:50; }
 </style>
 </head>
 <body>
 <header>
-  <span class="title">Hex Arrow Maze</span>
+  <span class="title">Hex Clear</span>
   <span class="left"><b id="count">0</b> left</span>
-  <button id="newBtn">&#8635; New</button>
+  <button id="newBtn">↻ New</button>
 </header>
 <div id="stage"><div id="board"></div></div>
 <div id="overlay">
-  <div class="msg">Cleared!</div>
-  <div class="sub" id="statLine"></div>
-  <button id="nextBtn">Next shape</button>
+  <div id="ovCard">
+    <div id="ovEmoji">🎉</div>
+    <div id="ovMsg">Cleared!</div>
+    <div id="ovSub"></div>
+    <button id="nextBtn">Next shape</button>
+  </div>
 </div>
 
 <script>
@@ -87,7 +96,7 @@ const ARROW_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2.5 L20 12.5 H15.4 V21 
 const board = document.getElementById('board');
 const countEl = document.getElementById('count');
 const overlay = document.getElementById('overlay');
-const statLine = document.getElementById('statLine');
+const statLine = document.getElementById('ovSub');
 
 let cell = 0; // hex radius in px, computed dynamically
 let grid = new Map();          // key -> arrow
@@ -294,10 +303,9 @@ function newGame() {
     a.el.firstChild.style.transform = `rotate(${a.dir * 60}deg)`;
     const hue = (hueBase + (q + r) / (cols + rows) * 300) % 360;
     a.el.style.background = `hsl(${hue} 68% 60%)`;
-    a.el.addEventListener('touchstart', e => {
-      e.preventDefault();
-      tap(a);
-    });
+    const onTap = e => { e.preventDefault(); tap(a); };
+    a.el.addEventListener('touchstart', onTap);
+    a.el.addEventListener('mousedown', onTap);
     grid.set(key(q, r), a);
     arrows.push(a);
     board.appendChild(a.el);
@@ -453,5 +461,6 @@ document.addEventListener('contextmenu', e => e.preventDefault());
 rowsH = 5; colsH = 7;
 newGame();
 </script>
-</body>
-</html>
+
+
+</body></html>

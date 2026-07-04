@@ -1,10 +1,10 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#14141f">
-<title>Untangle</title>
+<title>Tile Clear</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html, body { height:100%; overflow:hidden; }
@@ -19,10 +19,12 @@
     display:flex; align-items:center; justify-content:space-between;
     padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
   }
-  #levelLabel { font-weight:800; font-size:20px; color:#aab2d0; letter-spacing:1px; }
   #lives { display:flex; gap:7px; font-size:21px; }
   #lives span { transition:opacity .35s, filter .35s, transform .35s; }
   #lives span.lost { opacity:.22; filter:grayscale(1); transform:scale(.85); }
+  .header-center { display:flex; flex-direction:column; align-items:center; gap:1px; }
+  .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  #levelLabel { font-weight:800; font-size:18px; color:#aab2d0; letter-spacing:1px; }
   #restartBtn {
     background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
     border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
@@ -56,14 +58,17 @@
 </head>
 <body>
 <header>
-  <div id="lives"><span>&#10084;&#65039;</span><span>&#10084;&#65039;</span><span>&#10084;&#65039;</span></div>
-  <div id="levelLabel">Level 1</div>
-  <button id="restartBtn">&#8635;</button>
+  <div id="lives"><span>❤️</span><span>❤️</span><span>❤️</span></div>
+  <div class="header-center">
+    <span class="title">Tile Clear</span>
+    <div id="levelLabel">Level 1</div>
+  </div>
+  <button id="restartBtn">↻</button>
 </header>
-<div id="stage"><canvas id="cv"></canvas></div>
+<div id="stage"><canvas id="cv" width="2319" height="1330"></canvas></div>
 <div id="overlay">
   <div id="ovCard">
-    <div id="ovEmoji">&#128516;</div>
+    <div id="ovEmoji">😄</div>
     <div id="ovMsg">One Pass Win!</div>
     <div id="ovSub"></div>
     <button id="ovBtn">Next Level</button>
@@ -438,16 +443,20 @@ function newLevel() {
   layout();
 }
 
-cv.addEventListener('touchstart', e => {
-  e.preventDefault();
-  const touch = e.touches[0];
+function hitTest(clientX, clientY) {
   const rect = cv.getBoundingClientRect();
-  const x = Math.floor((touch.clientX - rect.left - bx) / cell);
-  const y = Math.floor((touch.clientY - rect.top - by) / cell);
+  const x = Math.floor((clientX - rect.left - bx) / cell);
+  const y = Math.floor((clientY - rect.top - by) / cell);
   if (x < 0 || x >= cols || y < 0 || y >= rows) return;
   const id = occ[y * cols + x];
   if (id !== -1) tap(snakes[id]);
+}
+
+cv.addEventListener('touchstart', e => {
+  e.preventDefault();
+  hitTest(e.touches[0].clientX, e.touches[0].clientY);
 });
+cv.addEventListener('mousedown', e => hitTest(e.clientX, e.clientY));
 
 document.getElementById('restartBtn').addEventListener('click', newLevel);
 window.addEventListener('resize', layout);
@@ -455,5 +464,6 @@ document.addEventListener('contextmenu', e => e.preventDefault());
 
 newLevel();
 </script>
-</body>
-</html>
+
+
+</body></html>
