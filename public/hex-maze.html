@@ -29,6 +29,12 @@
     box-shadow:0 3px 0 #b55a1c; touch-action:manipulation;
   }
   #newBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #b55a1c; }
+  #menuBtn {
+    background:#26263a; color:#dfe3f0; border:0; border-radius:10px;
+    padding:8px 14px; font-size:15px; font-weight:600; cursor:pointer;
+    text-decoration:none; touch-action:manipulation;
+  }
+  #menuBtn:active { transform:scale(.94); }
   #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
   #board { position:relative; touch-action:manipulation; }
   .tile {
@@ -66,6 +72,7 @@
 </head>
 <body>
 <header>
+  <a id="menuBtn" href="index.html">☰ Menu</a>
   <span class="title">Hex Clear</span>
   <span class="left"><b id="count">0</b> left</span>
   <button id="newBtn">↻ New</button>
