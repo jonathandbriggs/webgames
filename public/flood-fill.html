@@ -210,7 +210,7 @@ function updateHud() {
 
 // ── Input ──────────────────────────────────────────────────────────────
 cv.addEventListener('pointerdown', e => {
-  if (!playing || animating) return;
+  if (!playing) return;
   const r = cv.getBoundingClientRect();
   const x = Math.floor((e.clientX - r.left) / cell);
   const y = Math.floor((e.clientY - r.top) / cell);
@@ -224,10 +224,9 @@ cv.addEventListener('pointerdown', e => {
   const t0 = performance.now();
   flashes = [...after].filter(k => !before.has(k))
     .map(k => ({ x: k % size, y: (k - k % size) / size, t0 }));
-  animating = true;
   movesLeft--;
   updateHud();
-  requestAnimationFrame(draw);
+  if (!animating) { animating = true; requestAnimationFrame(draw); }
 
   if (after.size === size * size) win();
   else if (movesLeft <= 0) lose();
