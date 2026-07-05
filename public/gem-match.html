@@ -35,7 +35,7 @@
   }
   #menuBtn:active { transform:scale(.94); }
   #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative; }
-  canvas { touch-action:manipulation; cursor:pointer; border-radius:16px; background:#181830; box-shadow:0 0 40px rgba(120,60,255,.15), inset 0 1px 0 rgba(255,255,255,.04); }
+  canvas { touch-action:none; cursor:pointer; border-radius:16px; background:#181830; box-shadow:0 0 40px rgba(120,60,255,.15), inset 0 1px 0 rgba(255,255,255,.04); }
   #overlay {
     position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
     align-items:center; justify-content:center; text-align:center;
@@ -131,6 +131,40 @@ function makeGem(type, x, rowY) {
   return { type, px: x * cell, py: rowY * cell, tx: x * cell, ty: rowY * cell, scale: 1, alpha: 1 };
 }
 
+// ── Sprites ────────────────────────────────────────────────────────────
+// Gradient + shadow + emoji text are all slow canvas paths on Safari;
+// pre-render each gem type once per layout and blit with drawImage.
+const SPRITE_PAD = 1.25;   // sprite is wider than the gem so the glow fits
+let sprites = [];
+function buildSprites() {
+  const dpr = window.devicePixelRatio || 1;
+  const S = Math.ceil(cell * SPRITE_PAD * dpr);
+  sprites = GEM_COLORS.map((c, t) => {
+    const oc = document.createElement('canvas');
+    oc.width = oc.height = S;
+    const o = oc.getContext('2d');
+    o.translate(S / 2, S / 2);
+    const r = cell * 0.42 * dpr;
+    o.shadowColor = c.glow;
+    o.shadowBlur = 10 * dpr;
+    const grad = o.createRadialGradient(0, -r*0.3, r*0.15, 0, 0, r);
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(0.2, c.fg);
+    grad.addColorStop(0.6, c.bg);
+    grad.addColorStop(1, '#3a1a5c');
+    o.beginPath();
+    o.roundRect(-r, -r, r*2, r*2, r * 0.48);
+    o.fillStyle = grad;
+    o.fill();
+    o.shadowBlur = 0;
+    o.font = `${Math.floor(r * 1.1)}px serif`;
+    o.textAlign = 'center';
+    o.textBaseline = 'middle';
+    o.fillText(GEM_ICONS[t], 0, dpr);
+    return oc;
+  });
+}
+
 // ── Layout ─────────────────────────────────────────────────────────────
 function layout() {
   const stage = document.getElementById('stage');
@@ -147,6 +181,7 @@ function layout() {
     const g = grid[y] && grid[y][x];
     if (g) { g.px = g.tx = x * cell; g.py = g.ty = y * cell; }
   }
+  buildSprites();
 }
 window.addEventListener('resize', layout);
 
@@ -235,21 +270,39 @@ function hasAnyMove() {
 }
 
 // ── Input ──────────────────────────────────────────────────────────────
+let drag = null;  // {gx, gy, x0, y0} pointer held down on a gem
 cv.addEventListener('pointerdown', evt => {
   if (state !== 'idle') return;
   const rect = cv.getBoundingClientRect();
   const gx = Math.floor((evt.clientX - rect.left) / cell);
   const gy = Math.floor((evt.clientY - rect.top) / cell);
   if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) { sel = null; return; }
+  drag = { gx, gy, x0: evt.clientX, y0: evt.clientY };
   if (!sel) { sel = { x: gx, y: gy }; return; }
   if (sel.x === gx && sel.y === gy) { sel = null; return; }
   if (Math.abs(gx - sel.x) + Math.abs(gy - sel.y) === 1) {
     startSwap(sel.x, sel.y, gx, gy);
-    sel = null;
+    sel = null; drag = null;
   } else {
     sel = { x: gx, y: gy };
   }
 });
+
+// Drag a gem toward a neighbor to swap — the natural match-3 gesture.
+cv.addEventListener('pointermove', evt => {
+  if (!drag || state !== 'idle') return;
+  const dx = evt.clientX - drag.x0, dy = evt.clientY - drag.y0;
+  if (Math.hypot(dx, dy) < cell * 0.35) return;
+  const [sx, sy] = Math.abs(dx) > Math.abs(dy) ? [Math.sign(dx), 0] : [0, Math.sign(dy)];
+  const x2 = drag.gx + sx, y2 = drag.gy + sy;
+  if (x2 >= 0 && y2 >= 0 && x2 < COLS && y2 < ROWS) {
+    startSwap(drag.gx, drag.gy, x2, y2);
+    sel = null;
+  }
+  drag = null;
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('pointercancel', () => { drag = null; });
 
 cv.addEventListener('pointermove', evt => {
   if (evt.pointerType === 'touch') return;
@@ -376,30 +429,11 @@ function createSparkles(x, y) {
 
 // ── Render ─────────────────────────────────────────────────────────────
 function drawGem(g, wob) {
-  const cx = g.px + cell/2, cy = g.py + cell/2 + wob;
-  const r = cell * 0.42 * g.scale;
-  if (r < 1 || g.alpha <= 0.02) return;
-  ctx.save();
+  if (cell * 0.42 * g.scale < 1 || g.alpha <= 0.02) return;
+  const w = cell * SPRITE_PAD * g.scale;
   ctx.globalAlpha = g.alpha;
-  ctx.translate(cx, cy);
-  ctx.shadowColor = GEM_COLORS[g.type].glow;
-  ctx.shadowBlur = 10;
-  const c = GEM_COLORS[g.type];
-  const grad = ctx.createRadialGradient(0, -r*0.3, r*0.15, 0, 0, r);
-  grad.addColorStop(0, '#fff');
-  grad.addColorStop(0.2, c.fg);
-  grad.addColorStop(0.6, c.bg);
-  grad.addColorStop(1, '#3a1a5c');
-  ctx.beginPath();
-  ctx.roundRect(-r, -r, r*2, r*2, r * 0.48);
-  ctx.fillStyle = grad;
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.font = `${Math.floor(r * 1.1)}px serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(GEM_ICONS[g.type], 0, 1);
-  ctx.restore();
+  ctx.drawImage(sprites[g.type], g.px + cell/2 - w/2, g.py + cell/2 + wob - w/2, w, w);
+  ctx.globalAlpha = 1;
 }
 
 function drawParticle(p) {
