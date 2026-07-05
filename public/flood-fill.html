@@ -106,8 +106,10 @@ let grid = [];          // grid[y][x] = color index
 let movesLeft = 0;
 let playing = false;
 let cell = 0;
-let flashes = [];       // {x, y, t0} cells absorbed by the last flood
+let flashes = new Map(); // key -> {t0, old}: ripple wave of the last flood
 let animating = false;
+let hoverSet = null;     // keys a tap would absorb (pen/mouse preview)
+let hoverColor = -1;
 
 const movesEl = document.getElementById('moves');
 const levelEl = document.getElementById('level');
@@ -185,22 +187,33 @@ function draw() {
   let more = false;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      let s = 1;
-      const f = flashes.find(f => f.x === x && f.y === y);
+      const k = y * size + x;
+      let s = 1, colorIdx = grid[y][x];
+      const f = flashes.get(k);
       if (f) {
-        const t = (now - f.t0) / 300;
-        if (t < 1) { s = 0.6 + 0.4 * t; more = true; }
+        if (now < f.t0) { colorIdx = f.old; more = true; }  // wave hasn't arrived
+        else {
+          const t = (now - f.t0) / 300;
+          if (t < 1) { s = 0.6 + 0.4 * t; more = true; }
+        }
       }
-      const c = PALETTE[grid[y][x]];
+      const c = PALETTE[colorIdx];
       const w = cell * s, off = (cell - w) / 2;
       ctx.fillStyle = c.bg;
       ctx.beginPath();
       ctx.roundRect(x * cell + off + 1, y * cell + off + 1, w - 2, w - 2, cell * 0.18);
       ctx.fill();
+      if (hoverSet && hoverSet.has(k)) {
+        ctx.strokeStyle = 'rgba(255,255,255,.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(x * cell + 3, y * cell + 3, cell - 6, cell - 6, cell * 0.14);
+        ctx.stroke();
+      }
     }
   }
   if (more) requestAnimationFrame(draw);
-  else { flashes = []; animating = false; }
+  else { flashes.clear(); animating = false; }
 }
 
 function updateHud() {
@@ -218,18 +231,62 @@ cv.addEventListener('pointerdown', e => {
   const color = grid[y][x];
   if (color === grid[0][0]) return;
 
+  const oldOwned = grid[0][0];
   const before = ownedRegion(grid);
   applyFlood(grid, color);
   const after = ownedRegion(grid);
-  const t0 = performance.now();
-  flashes = [...after].filter(k => !before.has(k))
-    .map(k => ({ x: k % size, y: (k - k % size) / size, t0 }));
+  hoverSet = null; hoverColor = -1;
+
+  // Ripple: BFS depth from the tapped cell across the resulting region
+  // staggers each cell's animation start, so the fill radiates outward.
+  const now = performance.now();
+  const depth = new Map([[y * size + x, 0]]);
+  const queue = [y * size + x];
+  while (queue.length) {
+    const k = queue.shift();
+    const kx = k % size, ky = (k - kx) / size;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = kx + dx, ny = ky + dy;
+      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+      const nk = ny * size + nx;
+      if (after.has(nk) && !depth.has(nk)) { depth.set(nk, depth.get(k) + 1); queue.push(nk); }
+    }
+  }
+  flashes = new Map([...depth].map(([k, d]) =>
+    [k, { t0: now + Math.min(d * 25, 400), old: before.has(k) ? oldOwned : color }]));
+
   movesLeft--;
   updateHud();
   if (!animating) { animating = true; requestAnimationFrame(draw); }
 
   if (after.size === size * size) win();
   else if (movesLeft <= 0) lose();
+});
+
+cv.addEventListener('pointermove', e => {
+  if (!playing || e.pointerType === 'touch') return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / cell);
+  const y = Math.floor((e.clientY - r.top) / cell);
+  const c = (x >= 0 && y >= 0 && x < size && y < size) ? grid[y][x] : -1;
+  const valid = c >= 0 && c !== grid[0][0];
+  if ((valid ? c : -1) === hoverColor) return;
+  if (valid) {
+    const before = ownedRegion(grid);
+    const trial = grid.map(row => row.slice());
+    applyFlood(trial, c);
+    hoverSet = new Set([...ownedRegion(trial)].filter(k => !before.has(k)));
+    hoverColor = c;
+  } else {
+    hoverSet = null; hoverColor = -1;
+  }
+  if (!animating) requestAnimationFrame(draw);
+});
+
+cv.addEventListener('pointerleave', () => {
+  if (!hoverSet) return;
+  hoverSet = null; hoverColor = -1;
+  if (!animating) requestAnimationFrame(draw);
 });
 
 // ── Flow ───────────────────────────────────────────────────────────────
@@ -245,19 +302,20 @@ function win() {
   playing = false;
   levelIdx++;
   localStorage.setItem('floodLevel', levelIdx);
-  setTimeout(() => showOverlay('🏆', 'Level Complete!', 'The whole board is one color.', '▶ Level ' + levelIdx), 400);
+  setTimeout(() => showOverlay('🏆', 'Level Complete!', 'The whole board is one color.', '▶ Level ' + levelIdx), 700);
 }
 
 function lose() {
   playing = false;
-  setTimeout(() => showOverlay('💧', 'Out of Moves', 'The board resisted. Try again!', '↻ Retry'), 400);
+  setTimeout(() => showOverlay('💧', 'Out of Moves', 'The board resisted. Try again!', '↻ Retry'), 700);
 }
 
 function floodStart() {
   generate();
   playing = true;
-  flashes = [];
+  flashes = new Map();
   animating = false;
+  hoverSet = null; hoverColor = -1;
   overlay.classList.remove('show');
   updateHud();
   layout();
