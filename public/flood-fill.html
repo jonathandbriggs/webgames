@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0f0f23">
+<title>Flood Fill</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#0f0f23; color:#dfe3f0;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 12px; border-bottom:2px solid rgba(255,255,255,.07);
+  }
+  header .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  header .left { font-size:14px; color:#aaa; display:flex; gap:14px; align-items:center; }
+  header .left b { color:#dfe3f0; font-size:17px; }
+  #newBtn {
+    background:#e0762e; color:#fff; border:0; border-radius:10px;
+    padding:8px 12px; font-size:14px; font-weight:700; cursor:pointer;
+    box-shadow:0 3px 0 #b55a1c; touch-action:manipulation;
+  }
+  #newBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #b55a1c; }
+  #menuBtn {
+    background:#262138; color:#dfe3f0; border:0; border-radius:10px;
+    padding:8px 12px; font-size:14px; font-weight:600; cursor:pointer;
+    text-decoration:none; touch-action:manipulation;
+  }
+  #menuBtn:active { transform:scale(.94); }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative; }
+  canvas { touch-action:manipulation; cursor:pointer; border-radius:16px; background:#181830; box-shadow:0 0 40px rgba(120,60,255,.15), inset 0 1px 0 rgba(255,255,255,.04); }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,16,.7); backdrop-filter:blur(4px);
+    opacity:0; pointer-events:none; transition:opacity .35s ease; z-index:10;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #ovCard {
+    background:#2a2a48; border-radius:24px; padding:40px 56px;
+    box-shadow:0 16px 60px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08);
+    display:flex; flex-direction:column; align-items:center; gap:14px; min-width:320px;
+  }
+  #ovEmoji { font-size:72px; line-height:1; }
+  #ovMsg { font-size:32px; font-weight:800; color:#fff; letter-spacing:.5px; }
+  #ovSub { font-size:16px; color:#9aa1c4; }
+  .btn-primary {
+    margin-top:10px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 38px; font-size:17px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation; transition:transform .1s;
+  }
+  .btn-primary:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
+</style>
+</head>
+<body>
+<header>
+  <a id="menuBtn" href="index.html">☰</a>
+  <span class="title">Flood Fill <span id="level" style="color:#e0762e"></span></span>
+  <div class="left">
+    <span><b id="moves">0</b><small> moves</small></span>
+    <button id="newBtn" onclick="floodStart()">↻</button>
+  </div>
+</header>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="overlay" class="show">
+  <div id="ovCard">
+    <div id="ovEmoji">🎨</div>
+    <div id="ovMsg">Flood Fill</div>
+    <div id="ovSub">You own the top-left corner. Tap a color to flood into it. Paint the whole board before moves run out!</div>
+    <button class="btn-primary" id="ovBtn" onclick="floodStart()">▶ Start</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+// Flood Fill — the player owns the connected region at the top-left corner.
+// Tapping any cell outside the region floods the region to that cell's color,
+// absorbing every same-color cell adjacent to it. Win by making the whole
+// board one color within the move limit. The limit comes from an actual
+// greedy solution of the generated board, so every level is winnable.
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+
+const PALETTE = [
+  { bg:'#FF4D6A', glow:'rgba(255,77,106,.35)' },   // Red/Pink
+  { bg:'#5AC8FA', glow:'rgba(90,200,250,.35)' },   // Blue/Cyan
+  { bg:'#FFB64C', glow:'rgba(255,182,76,.35)' },   // Orange/Gold
+  { bg:'#7AE1AF', glow:'rgba(122,225,175,.35)' },  // Green/Mint
+  { bg:'#A680FF', glow:'rgba(166,128,255,.35)' },  // Purple/Violet
+  { bg:'#FF79D6', glow:'rgba(255,121,214,.35)' },  // Rose/HotPink
+];
+
+// ── State ──────────────────────────────────────────────────────────────
+let levelIdx = +localStorage.getItem('floodLevel') || 1;
+let size = 0, colors = 0;
+let grid = [];          // grid[y][x] = color index
+let movesLeft = 0;
+let playing = false;
+let cell = 0;
+let flashes = [];       // {x, y, t0} cells absorbed by the last flood
+let animating = false;
+
+const movesEl = document.getElementById('moves');
+const levelEl = document.getElementById('level');
+
+// ── Region helpers ─────────────────────────────────────────────────────
+// BFS from (0,0) over cells matching the owned color.
+function ownedRegion(g) {
+  const color = g[0][0];
+  const seen = new Set([0]);
+  const queue = [0];
+  while (queue.length) {
+    const k = queue.pop();
+    const x = k % size, y = (k - x) / size;
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+      const nk = ny * size + nx;
+      if (!seen.has(nk) && g[ny][nx] === color) { seen.add(nk); queue.push(nk); }
+    }
+  }
+  return seen;
+}
+
+function applyFlood(g, color) {
+  for (const k of ownedRegion(g)) g[(k - k % size) / size][k % size] = color;
+}
+
+// ── Generation ─────────────────────────────────────────────────────────
+// Greedy solve: each move pick the color that grows the region the most.
+// Returns the move count. Used only to derive a fair, achievable limit.
+function greedySolve(g) {
+  g = g.map(row => row.slice());
+  let moves = 0;
+  while (ownedRegion(g).size < size * size) {
+    let best = -1, bestGain = -1;
+    for (let c = 0; c < colors; c++) {
+      if (c === g[0][0]) continue;
+      const trial = g.map(row => row.slice());
+      applyFlood(trial, c);
+      const gain = ownedRegion(trial).size;
+      if (gain > bestGain) { bestGain = gain; best = c; }
+    }
+    applyFlood(g, best);
+    moves++;
+  }
+  return moves;
+}
+
+function generate() {
+  size = Math.min(8 + Math.floor((levelIdx - 1) / 2), 14);
+  colors = Math.min(4 + Math.floor((levelIdx - 1) / 4), 6);
+  grid = Array.from({ length: size }, () =>
+    Array.from({ length: size }, () => Math.floor(Math.random() * colors)));
+  const slack = Math.max(0, 2 - Math.floor((levelIdx - 1) / 4));
+  movesLeft = greedySolve(grid) + slack;
+}
+
+// ── Layout & drawing ───────────────────────────────────────────────────
+function layout() {
+  const stage = document.getElementById('stage');
+  const pad = 16;
+  const avail = Math.min(stage.clientWidth, stage.clientHeight) - pad * 2;
+  cell = Math.max(10, Math.floor(avail / size));
+  const px = cell * size;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = px * dpr; cv.height = px * dpr;
+  cv.style.width = px + 'px'; cv.style.height = px + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const now = performance.now();
+  let more = false;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let s = 1;
+      const f = flashes.find(f => f.x === x && f.y === y);
+      if (f) {
+        const t = (now - f.t0) / 300;
+        if (t < 1) { s = 0.6 + 0.4 * t; more = true; }
+      }
+      const c = PALETTE[grid[y][x]];
+      const w = cell * s, off = (cell - w) / 2;
+      ctx.fillStyle = c.bg;
+      ctx.beginPath();
+      ctx.roundRect(x * cell + off + 1, y * cell + off + 1, w - 2, w - 2, cell * 0.18);
+      ctx.fill();
+    }
+  }
+  if (more) requestAnimationFrame(draw);
+  else { flashes = []; animating = false; }
+}
+
+function updateHud() {
+  movesEl.textContent = movesLeft;
+  levelEl.textContent = 'Lv ' + levelIdx;
+}
+
+// ── Input ──────────────────────────────────────────────────────────────
+cv.addEventListener('pointerdown', e => {
+  if (!playing || animating) return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / cell);
+  const y = Math.floor((e.clientY - r.top) / cell);
+  if (x < 0 || y < 0 || x >= size || y >= size) return;
+  const color = grid[y][x];
+  if (color === grid[0][0]) return;
+
+  const before = ownedRegion(grid);
+  applyFlood(grid, color);
+  const after = ownedRegion(grid);
+  const t0 = performance.now();
+  flashes = [...after].filter(k => !before.has(k))
+    .map(k => ({ x: k % size, y: (k - k % size) / size, t0 }));
+  animating = true;
+  movesLeft--;
+  updateHud();
+  requestAnimationFrame(draw);
+
+  if (after.size === size * size) win();
+  else if (movesLeft <= 0) lose();
+});
+
+// ── Flow ───────────────────────────────────────────────────────────────
+function showOverlay(emoji, msg, sub, btn) {
+  document.getElementById('ovEmoji').textContent = emoji;
+  document.getElementById('ovMsg').textContent = msg;
+  document.getElementById('ovSub').textContent = sub;
+  document.getElementById('ovBtn').textContent = btn;
+  overlay.classList.add('show');
+}
+
+function win() {
+  playing = false;
+  levelIdx++;
+  localStorage.setItem('floodLevel', levelIdx);
+  setTimeout(() => showOverlay('🏆', 'Level Complete!', 'The whole board is one color.', '▶ Level ' + levelIdx), 400);
+}
+
+function lose() {
+  playing = false;
+  setTimeout(() => showOverlay('💧', 'Out of Moves', 'The board resisted. Try again!', '↻ Retry'), 400);
+}
+
+function floodStart() {
+  generate();
+  playing = true;
+  flashes = [];
+  animating = false;
+  overlay.classList.remove('show');
+  updateHud();
+  layout();
+}
+
+window.addEventListener('resize', () => { if (size) layout(); });
+updateHud();
+</script>
+</body>
+</html>

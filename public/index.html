@@ -21,8 +21,8 @@
     -webkit-background-clip:text; background-clip:text; color:transparent;
   }
   ul {
-    list-style:none; display:flex; flex-direction:column; gap:14px;
-    width:100%; max-width:340px;
+    list-style:none; display:grid; grid-template-columns:repeat(3, 1fr); gap:14px;
+    width:100%; max-width:520px;
   }
   li {
     opacity:0; transform:scale(.9);
@@ -33,15 +33,16 @@
   li:nth-child(3) { animation-delay:.25s; }
   li:nth-child(4) { animation-delay:.35s; }
   li:nth-child(5) { animation-delay:.45s; }
+  li:nth-child(6) { animation-delay:.55s; }
   @keyframes popIn { to { opacity:1; transform:scale(1); } }
   a {
-    display:flex; align-items:center; gap:14px;
-    background:#20212f; color:#dfe3f0; text-decoration:none;
-    border-radius:18px; padding:18px 22px; font-size:18px; font-weight:700;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    background:#20212f; color:#dfe3f0; text-decoration:none; text-align:center;
+    border-radius:18px; padding:20px 8px; font-size:14px; font-weight:700;
     box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
     transition:transform .15s, background .15s, color .15s;
   }
-  a .glyph { font-size:26px; }
+  a .glyph { font-size:30px; }
   a:hover { background:#262838; color:#e0762e; }
   a:active { transform:scale(.96); }
   footer { color:#9aa1bd; font-size:13px; }
@@ -55,6 +56,7 @@
     <li><a href="hex-maze.html"><span class="glyph">⬡</span>Hex Maze</a></li>
     <li><a href="circuit.html"><span class="glyph">⚡</span>Circuit</a></li>
     <li><a href="gem-match.html"><span class="glyph">💎</span>Gem Match</a></li>
+    <li><a href="flood-fill.html"><span class="glyph">🎨</span>Flood Fill</a></li>
   </ul>
   <footer>Deployed CI/CD style via Cloudflare Pages 🚀</footer>
 </body>
