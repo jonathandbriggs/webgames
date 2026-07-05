@@ -276,6 +276,10 @@ function newGame() {
     const onTap = e => { e.preventDefault(); tap(a); };
     a.el.addEventListener('touchstart', onTap);
     a.el.addEventListener('mousedown', onTap);
+    a.el.addEventListener('pointerenter', e => {
+      if (e.pointerType !== 'touch' && !gameOver) a.el.style.filter = 'brightness(1.35)';
+    });
+    a.el.addEventListener('pointerleave', () => { a.el.style.filter = ''; });
     grid.set(key(x, y), a);
     arrows.push(a);
     board.appendChild(a.el);

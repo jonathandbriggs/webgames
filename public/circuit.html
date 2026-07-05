@@ -92,6 +92,7 @@ const rotCW = m => ((m << 1) | (m >> 3)) & 15;
 
 let level = +localStorage.getItem('circuitLevel') || 1;
 let cols = 0, rows = 0, cell = 40, src = 0, taps = 0, gameOver = false;
+let hoverI = -1;   // tile under a hovering pen/mouse
 let mask = [], angle = [], lit = [], litAt = [];   // per-cell: wire bits, anim degrees, powered, glow ramp time
 
 function genTree() {
@@ -140,7 +141,7 @@ function newGame() {
   overlay.classList.remove('show');
   const n = Math.min(4 + Math.floor((level - 1) / 2), 9);
   cols = n; rows = Math.min(n + 2, 11);
-  taps = 0; gameOver = false;
+  taps = 0; gameOver = false; hoverI = -1;
   document.getElementById('lvl').textContent = level;
   genTree();
   src = (rows >> 1) * cols + (cols >> 1);
@@ -185,6 +186,16 @@ cv.addEventListener('pointerdown', e => {
   computeLit();
   if (lit.every(Boolean)) win();
 });
+
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch' || gameOver) return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / cell);
+  const y = Math.floor((e.clientY - r.top) / cell);
+  hoverI = (x >= 0 && x < cols && y >= 0 && y < rows) ? y * cols + x : -1;
+  if (hoverI >= 0 && (mask[hoverI] === 0 || mask[hoverI] === 15)) hoverI = -1; // tap would do nothing
+});
+cv.addEventListener('pointerleave', () => { hoverI = -1; });
 
 /* ---------- drawing ---------- */
 
@@ -255,6 +266,14 @@ function tick(t) {
       if (angle[i] > -0.5) angle[i] = 0;
     }
     drawTile(i, t);
+  }
+  if (hoverI >= 0 && !gameOver) {
+    const x = hoverI % cols, y = (hoverI - x) / cols;
+    ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(x * cell + 3, y * cell + 3, cell - 6, cell - 6, 8);
+    ctx.stroke();
   }
   requestAnimationFrame(tick);
 }

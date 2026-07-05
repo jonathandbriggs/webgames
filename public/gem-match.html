@@ -120,6 +120,7 @@ let particles = [];
 let score = 0, targetScore = 0, movesLeft = 0;
 let combo = 0;
 let sel = null;       // {x, y} selected cell
+let hov = null;       // {x, y} cell under a hovering pen/mouse
 let swapPair = null;  // [{x,y},{x,y}] cells of the in-flight swap
 let state = 'over';   // idle | swap | swapback | pop | fall | over
 let popT = 0;
@@ -249,6 +250,15 @@ cv.addEventListener('pointerdown', evt => {
     sel = { x: gx, y: gy };
   }
 });
+
+cv.addEventListener('pointermove', evt => {
+  if (evt.pointerType === 'touch') return;
+  const rect = cv.getBoundingClientRect();
+  const gx = Math.floor((evt.clientX - rect.left) / cell);
+  const gy = Math.floor((evt.clientY - rect.top) / cell);
+  hov = (gx >= 0 && gy >= 0 && gx < COLS && gy < ROWS) ? { x: gx, y: gy } : null;
+});
+cv.addEventListener('pointerleave', () => { hov = null; });
 
 function startSwap(x1, y1, x2, y2) {
   swapPair = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
@@ -443,6 +453,15 @@ function tick() {
   }
   for (const g of dying) drawGem(g, 0);
   for (const p of particles) drawParticle(p);
+  if (hov && state === 'idle' && !(sel && sel.x === hov.x && sel.y === hov.y)) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(hov.x * cell + 3, hov.y * cell + 3, cell - 6, cell - 6, 10);
+    ctx.stroke();
+    ctx.restore();
+  }
   if (sel && state === 'idle') {
     const pulse = 2 + Math.sin(Date.now() / 200) * 1.5;
     ctx.save();

@@ -112,6 +112,7 @@ let cols, rows, snakes, occ, cell, bx, by;
 let lives, taps, startTime, remaining, failed = false, won = false;
 let animating = new Set();
 let rafId = 0;
+let hoverId = -1;   // snake under a hovering pen/mouse
 
 function mulberry32(a) {
   return function() {
@@ -321,8 +322,10 @@ function draw() {
 
 function drawSnake(s) {
   const a = s.state === 'idle' ? s.a0 : s.animA;
-  const color = s.state === 'exit' ? s.bright : s.state === 'bump' ? COLORS.bump : s.color;
+  const hovered = s.state === 'idle' && s.id === hoverId;
+  const color = s.state === 'exit' ? s.bright : s.state === 'bump' ? COLORS.bump : hovered ? s.bright : s.color;
   if (s.state === 'exit') { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.55; }
+  else if (hovered) { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.3; }
   const lw = Math.max(4, cell * 0.3);
   const headInset = cell * 0.42;
   // body polyline from just behind the arrowhead to the tail
@@ -468,6 +471,18 @@ cv.addEventListener('touchstart', e => {
   hitTest(e.touches[0].clientX, e.touches[0].clientY);
 });
 cv.addEventListener('mousedown', e => hitTest(e.clientX, e.clientY));
+
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') return;
+  const rect = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left - bx) / cell);
+  const y = Math.floor((e.clientY - rect.top - by) / cell);
+  const id = (x >= 0 && x < cols && y >= 0 && y < rows) ? occ[y * cols + x] : -1;
+  if (id !== hoverId) { hoverId = id; if (!rafId) draw(); }
+});
+cv.addEventListener('pointerleave', () => {
+  if (hoverId !== -1) { hoverId = -1; if (!rafId) draw(); }
+});
 
 document.getElementById('restartBtn').addEventListener('click', newLevel);
 window.addEventListener('resize', layout);
