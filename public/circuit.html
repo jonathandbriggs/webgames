@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14141f">
+<title>Circuit</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#14141f; color:#dfe3f0;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
+  }
+  header .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  header .left { font-size:15px; color:#aaa; }
+  header .left b { color:#dfe3f0; font-size:18px; }
+  #newBtn {
+    background:#e0762e; color:#fff; border:0; border-radius:10px;
+    padding:8px 16px; font-size:15px; font-weight:700; cursor:pointer;
+    box-shadow:0 3px 0 #b55a1c; touch-action:manipulation;
+  }
+  #newBtn:active { transform:translateY(2px); box-shadow:0 1px 0 #b55a1c; }
+  #menuBtn {
+    background:#26263a; color:#dfe3f0; border:0; border-radius:10px;
+    padding:8px 14px; font-size:15px; font-weight:600; cursor:pointer;
+    text-decoration:none; touch-action:manipulation;
+  }
+  #menuBtn:active { transform:scale(.94); }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  canvas { touch-action:manipulation; cursor:pointer; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,14,.6); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .35s;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #ovCard {
+    background:#20212f; border-radius:22px; padding:34px 44px;
+    box-shadow:0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+  }
+  #ovEmoji { font-size:64px; line-height:1; }
+  #ovMsg { font-size:30px; font-weight:800; color:#fff; }
+  #ovSub { font-size:15px; color:#9aa1bd; }
+  #nextBtn {
+    margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation;
+  }
+  #nextBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
+  .confetti { position:fixed; top:-20px; width:10px; height:14px; border-radius:3px; pointer-events:none; z-index:50; }
+</style>
+</head>
+<body>
+<header>
+  <a id="menuBtn" href="index.html">☰ Menu</a>
+  <span class="title">Circuit</span>
+  <span class="left">Lvl <b id="lvl">1</b></span>
+  <button id="newBtn">↻ New</button>
+</header>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="overlay">
+  <div id="ovCard">
+    <div id="ovEmoji">⚡</div>
+    <div id="ovMsg">Powered up!</div>
+    <div id="ovSub"></div>
+    <button id="nextBtn">Next level</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+// Rotate wire tiles until every one is connected to the power core.
+// Board is a scrambled spanning tree, so it is always solvable.
+
+const DIRS = [{dx:0,dy:-1},{dx:1,dy:0},{dx:0,dy:1},{dx:-1,dy:0}]; // bit: 0 up, 1 right, 2 down, 3 left
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+
+const rnd = n => Math.floor(Math.random() * n);
+const rotCW = m => ((m << 1) | (m >> 3)) & 15;
+
+let level = +localStorage.getItem('circuitLevel') || 1;
+let cols = 0, rows = 0, cell = 40, src = 0, taps = 0, gameOver = false;
+let mask = [], angle = [], lit = [], litAt = [];   // per-cell: wire bits, anim degrees, powered, glow ramp time
+
+function genTree() {
+  mask = new Array(cols * rows).fill(0);
+  const seen = new Array(cols * rows).fill(false);
+  const stack = [rnd(cols * rows)];
+  seen[stack[0]] = true;
+  while (stack.length) {
+    const i = stack[stack.length - 1], x = i % cols, y = (i - x) / cols;
+    const opts = [];
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DIRS[d].dx, ny = y + DIRS[d].dy;
+      if (nx >= 0 && nx < cols && ny >= 0 && ny < rows && !seen[ny * cols + nx]) opts.push(d);
+    }
+    if (!opts.length) { stack.pop(); continue; }
+    const d = opts[rnd(opts.length)];
+    const ni = (y + DIRS[d].dy) * cols + x + DIRS[d].dx;
+    mask[i] |= 1 << d;
+    mask[ni] |= 1 << ((d + 2) % 4);
+    seen[ni] = true;
+    stack.push(ni);
+  }
+}
+
+function computeLit() {
+  const was = lit;
+  lit = new Array(cols * rows).fill(false);
+  lit[src] = true;
+  const q = [src];
+  while (q.length) {
+    const i = q.pop(), x = i % cols, y = (i - x) / cols;
+    for (let d = 0; d < 4; d++) {
+      if (!(mask[i] & (1 << d))) continue;
+      const nx = x + DIRS[d].dx, ny = y + DIRS[d].dy;
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      const ni = ny * cols + nx;
+      if (!lit[ni] && (mask[ni] & (1 << ((d + 2) % 4)))) { lit[ni] = true; q.push(ni); }
+    }
+  }
+  const now = performance.now();
+  for (let i = 0; i < lit.length; i++)
+    if (lit[i] && !(was && was[i])) litAt[i] = now;
+}
+
+function newGame() {
+  overlay.classList.remove('show');
+  const n = Math.min(4 + Math.floor((level - 1) / 2), 9);
+  cols = n; rows = Math.min(n + 2, 11);
+  taps = 0; gameOver = false;
+  document.getElementById('lvl').textContent = level;
+  genTree();
+  src = (rows >> 1) * cols + (cols >> 1);
+  angle = new Array(cols * rows).fill(0);
+  litAt = new Array(cols * rows).fill(0);
+  lit = null;
+  // scramble; force at least a few misaligned tiles so it never spawns solved
+  do {
+    for (let i = 0; i < mask.length; i++) {
+      const r = rnd(4);
+      for (let k = 0; k < r; k++) mask[i] = rotCW(mask[i]);
+    }
+    lit = null; computeLit();
+  } while (lit.every(Boolean));
+  layout();
+}
+
+function layout() {
+  const stage = document.getElementById('stage');
+  const dpr = window.devicePixelRatio || 1;
+  let w = stage.clientWidth - 16, h = stage.clientHeight - 16;
+  if (w <= 0 || h <= 0) { w = innerWidth - 16; h = innerHeight - 72; }
+  cell = Math.max(28, Math.min(84, Math.floor(Math.min(w / cols, h / rows))));
+  cv.style.width = cols * cell + 'px';
+  cv.style.height = rows * cell + 'px';
+  cv.width = cols * cell * dpr;
+  cv.height = rows * cell * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+cv.addEventListener('pointerdown', e => {
+  if (gameOver) return;
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / cell);
+  const y = Math.floor((e.clientY - r.top) / cell);
+  if (x < 0 || x >= cols || y < 0 || y >= rows) return;
+  const i = y * cols + x;
+  if (mask[i] === 0 || mask[i] === 15) return;   // nothing visible would change
+  taps++;
+  mask[i] = rotCW(mask[i]);
+  angle[i] -= 90;
+  computeLit();
+  if (lit.every(Boolean)) win();
+});
+
+/* ---------- drawing ---------- */
+
+function drawTile(i, t) {
+  const x = i % cols, y = (i - x) / cols;
+  const cx = x * cell + cell / 2, cy = y * cell + cell / 2;
+  const m = mask[i];
+  if (!m) return;
+  const on = lit[i];
+  const ramp = on ? Math.min(1, (t - litAt[i]) / 220) : 0;
+  const pulse = 0.85 + 0.15 * Math.sin(t / 300 + (x + y) * 0.7);
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (angle[i]) ctx.rotate(angle[i] * Math.PI / 180);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = Math.max(4, cell * 0.14);
+  if (on) {
+    ctx.strokeStyle = `rgba(240,150,70,${0.55 + 0.45 * ramp * pulse})`;
+    ctx.shadowColor = '#e0762e';
+    ctx.shadowBlur = cell * 0.3 * ramp * pulse;
+  } else {
+    ctx.strokeStyle = '#3a3d52';
+    ctx.shadowBlur = 0;
+  }
+  ctx.beginPath();
+  for (let d = 0; d < 4; d++) {
+    if (!(m & (1 << d))) continue;
+    ctx.moveTo(0, 0);
+    ctx.lineTo(DIRS[d].dx * cell / 2, DIRS[d].dy * cell / 2);
+  }
+  ctx.stroke();
+
+  // node: bulb on dead ends, hub dot elsewhere
+  const deg = (m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1) + ((m >> 3) & 1);
+  const r = deg === 1 ? cell * 0.18 : cell * 0.09;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = on ? `rgba(255,190,120,${0.7 + 0.3 * pulse})` : '#2a2c3e';
+  ctx.fill();
+  if (deg === 1 && !on) { ctx.strokeStyle = '#4a4d66'; ctx.lineWidth = 2; ctx.stroke(); }
+  ctx.restore();
+
+  if (i === src) {   // power core ring, drawn unrotated
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.beginPath();
+    ctx.arc(0, 0, cell * 0.26, 0, Math.PI * 2);
+    ctx.strokeStyle = '#4d96ff';
+    ctx.lineWidth = Math.max(3, cell * 0.08);
+    ctx.shadowColor = '#4d96ff';
+    ctx.shadowBlur = cell * 0.35 * pulse;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function tick(t) {
+  // grid backdrop
+  ctx.clearRect(0, 0, cols * cell, rows * cell);
+  ctx.strokeStyle = 'rgba(255,255,255,.04)';
+  ctx.lineWidth = 1;
+  for (let x = 1; x < cols; x++) { ctx.beginPath(); ctx.moveTo(x * cell, 0); ctx.lineTo(x * cell, rows * cell); ctx.stroke(); }
+  for (let y = 1; y < rows; y++) { ctx.beginPath(); ctx.moveTo(0, y * cell); ctx.lineTo(cols * cell, y * cell); ctx.stroke(); }
+  for (let i = 0; i < mask.length; i++) {
+    if (angle[i]) {
+      angle[i] *= 0.78;   // ease rotation back to rest
+      if (angle[i] > -0.5) angle[i] = 0;
+    }
+    drawTile(i, t);
+  }
+  requestAnimationFrame(tick);
+}
+
+function win() {
+  gameOver = true;
+  document.getElementById('ovSub').textContent = `Level ${level} · ${taps} taps`;
+  level++;
+  localStorage.setItem('circuitLevel', level);
+  setTimeout(() => overlay.classList.add('show'), 600);
+  confetti();
+}
+
+function confetti() {
+  for (let i = 0; i < 70; i++) {
+    const c = document.createElement('div');
+    c.className = 'confetti';
+    c.style.left = Math.random() * 100 + 'vw';
+    c.style.background = `hsl(${rnd(360)} 80% 60%)`;
+    document.body.appendChild(c);
+    c.animate(
+      [{ transform:'translateY(0) rotate(0deg)', opacity:1 },
+       { transform:`translateY(${innerHeight + 60}px) rotate(${540 + rnd(720)}deg) translateX(${rnd(120) - 60}px)`, opacity:0.7 }],
+      { duration:1400 + rnd(1400), delay:rnd(500), easing:'cubic-bezier(.3,.4,.6,1)', fill:'forwards' }
+    ).onfinish = () => c.remove();
+  }
+}
+
+document.getElementById('newBtn').addEventListener('click', newGame);
+document.getElementById('nextBtn').addEventListener('click', newGame);
+window.addEventListener('resize', layout);
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+newGame();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
