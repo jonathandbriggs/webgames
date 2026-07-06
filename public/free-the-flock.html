@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#141b2e">
+<title>Free the Flock</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#141b2e; color:#dfe3f0;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
+  }
+  #lives { display:flex; gap:7px; font-size:21px; }
+  #lives span { transition:opacity .35s, filter .35s, transform .35s; }
+  #lives span.lost { opacity:.22; filter:grayscale(1); transform:scale(.85); }
+  .header-center { display:flex; flex-direction:column; align-items:center; gap:1px; }
+  .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  #levelLabel { font-weight:800; font-size:18px; color:#aab2d0; letter-spacing:1px; }
+  #restartBtn {
+    background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
+    border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
+    touch-action:manipulation;
+  }
+  #restartBtn:active { transform:scale(.94); }
+  #headerRight { display:flex; align-items:center; gap:8px; }
+  #menuBtn {
+    background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
+    border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
+    text-decoration:none; touch-action:manipulation;
+  }
+  #menuBtn:active { transform:scale(.94); }
+  #stage { flex:1; position:relative; overflow:hidden; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,14,.6); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .35s;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #ovCard {
+    background:#20212f; border-radius:22px; padding:34px 40px; max-width:340px;
+    box-shadow:0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+  }
+  #ovEmoji { font-size:64px; line-height:1; }
+  #ovMsg { font-size:28px; font-weight:800; color:#fff; }
+  #ovSub { font-size:15px; color:#9aa1bd; line-height:1.45; }
+  #ovBtn {
+    margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation;
+  }
+  #ovBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
+</style>
+</head>
+<body>
+<header>
+  <a id="menuBtn" href="index.html">☰</a>
+  <div class="header-center">
+    <span class="title">Free the Flock</span>
+    <div id="levelLabel">Level 1</div>
+  </div>
+  <div id="headerRight">
+    <div id="lives"><span>❤️</span><span>❤️</span><span>❤️</span></div>
+    <button id="restartBtn">↻</button>
+  </div>
+</header>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="overlay">
+  <div id="ovCard">
+    <div id="ovEmoji">🐦</div>
+    <div id="ovMsg">Free the Flock!</div>
+    <div id="ovSub"></div>
+    <button id="ovBtn">Play</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+const COLORS = {
+  parrot: { body:'#8ec5ff', wing:'#5f9fe8', belly:'#e2f1ff', beak:'#ff9f43', cheek:'#ffd08a' },
+  hawk:   { body:'#9c6b3f', wing:'#6e4526', belly:'#c49668', beak:'#e8b64c', brow:'#2b1c10' },
+  rope:'#c9a86a', ropeDark:'#8a6b3d', branch:'#4b3421', branchHi:'#61452c',
+  danger:'#ff4d57',
+};
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const stage = document.getElementById('stage');
+const overlay = document.getElementById('overlay');
+const ovEmoji = document.getElementById('ovEmoji');
+const ovMsg = document.getElementById('ovMsg');
+const ovSub = document.getElementById('ovSub');
+const ovBtn = document.getElementById('ovBtn');
+const livesEl = document.getElementById('lives');
+
+let level = Math.max(1, parseInt(localStorage.getItem('flockLevel')) || 1);
+let P, maxH, stacks, birds;            // poles, max stack height, stacks of birds
+let W, H, branchY, poleGap, poleX0, slotH, birdS;
+let lives, taps, startTime, remaining, failed = false, won = false, blockOverlay = false;
+let fliers = [];                       // birds mid-flight
+let effects = [];                      // lunges / shakes / danger lines
+let ropeH = [];                        // animated rope heights (px)
+let stars = [], clouds = [];
+let lastT = 0;
+
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------- rules ----------
+   Only the top bird of a rope can be freed.
+   A parrot escapes unless a neighbouring rope's top bird is a hawk perched
+   at the parrot's height or higher (the hawk pounces as it passes).
+   A hawk leaves unless a neighbouring rope's top bird is a parrot at the
+   hawk's height or lower (it won't abandon prey in sight). */
+function topOf(p) { return stacks[p].length ? stacks[p][stacks[p].length - 1] : null; }
+
+function blockedBy(b) {
+  for (const n of [b.pole - 1, b.pole + 1]) {
+    if (n < 0 || n >= P) continue;
+    const t = topOf(n);
+    if (!t) continue;
+    if (b.type === 'p' && t.type === 'h' && t.h >= b.h) return { hawk:t, prey:b };
+    if (b.type === 'h' && t.type === 'p' && t.h <= b.h) return { hawk:b, prey:t };
+  }
+  return null;
+}
+
+function anyLegal() {
+  for (let p = 0; p < P; p++) {
+    const t = topOf(p);
+    if (t && !blockedBy(t)) return true;
+  }
+  return false;
+}
+
+/* ---------- generation ----------
+   Birds are placed in reverse removal order: each new bird lands on top of a
+   rope only if it could legally fly away from the resulting position. Playing
+   the placements backwards is then always a winning order. */
+function generate(lv) {
+  P = Math.min(6, 3 + ((lv - 1) / 3 | 0));
+  maxH = Math.min(5, 3 + ((lv - 1) / 4 | 0));
+  const target = Math.min(Math.floor(P * maxH * 0.75), 4 + Math.ceil(lv * 1.3));
+  const hawks = Math.max(1, Math.round(target * 0.38));
+  let best = null;
+  for (let salt = 0; salt < 40; salt++) {
+    const s = genAttempt(lv, salt, target, hawks);
+    const n = s.reduce((a, st) => a + st.length, 0);
+    if (!best || n > best.n) best = { stacks: s, n };
+    if (best.n >= target) break;
+  }
+  stacks = best.stacks;
+  birds = [];
+  for (let p = 0; p < P; p++)
+    stacks[p].forEach((b, i) => {
+      b.pole = p; b.h = i + 1;
+      b.face = p < (P - 1) / 2 ? 1 : p > (P - 1) / 2 ? -1 : (i % 2 ? 1 : -1);
+      b.phase = (p * 2.6 + i * 1.7) % 6.28;
+      b.state = 'idle';
+      birds.push(b);
+    });
+  remaining = birds.length;
+  ropeH = stacks.map(st => (st.length ? st.length * 1 : 0)); // set for real in layout()
+}
+
+function genAttempt(lv, salt, target, hawks) {
+  const rng = mulberry32(lv * 1013904223 + salt * 7919 + 99991);
+  const st = Array.from({ length: P }, () => []);
+  const quota = { p: target - hawks, h: hawks };
+  const valid = (pole, type, h) => {
+    for (const n of [pole - 1, pole + 1]) {
+      if (n < 0 || n >= P || !st[n].length) continue;
+      const t = st[n][st[n].length - 1], th = st[n].length;
+      if (type === 'p' && t.type === 'h' && th >= h) return false;
+      if (type === 'h' && t.type === 'p' && th <= h) return false;
+    }
+    return true;
+  };
+  for (let k = 0; k < target; k++) {
+    const cands = [];
+    for (let p = 0; p < P; p++) {
+      if (st[p].length >= maxH) continue;
+      const h = st[p].length + 1;
+      for (const type of ['p', 'h'])
+        if (quota[type] > 0 && valid(p, type, h)) cands.push({ p, type });
+    }
+    if (!cands.length) break;
+    const pick = cands[(rng() * cands.length) | 0];
+    st[pick.p].push({ type: pick.type });
+    quota[pick.type]--;
+  }
+  return st;
+}
+
+/* ---------- geometry ---------- */
+function layout() {
+  W = stage.clientWidth; H = stage.clientHeight;
+  if (!W || !H) { W = window.innerWidth; H = window.innerHeight - 56; }
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  branchY = H - Math.max(46, H * 0.09);
+  const margin = Math.max(14, W * 0.04);
+  poleGap = (W - margin * 2) / P;
+  poleX0 = margin + poleGap / 2;
+  slotH = Math.min(100, (branchY - 70) / (maxH + 0.55));
+  birdS = Math.min(slotH * 0.36, poleGap * 0.27, 34);
+  ropeH = stacks.map(st => ropeTarget(st));
+  const srng = mulberry32(level * 31 + 5);
+  stars = Array.from({ length: 55 }, () => ({
+    x: srng() * W, y: srng() * branchY * 0.72,
+    r: 0.6 + srng() * 1.3, ph: srng() * 6.28,
+  }));
+  clouds = Array.from({ length: 4 }, (_, i) => ({
+    x: srng() * W, y: 40 + srng() * branchY * 0.45,
+    s: 0.7 + srng() * 0.9, v: 3 + srng() * 5, flip: i % 2 ? 1 : -1,
+  }));
+}
+const poleX = p => poleX0 + p * poleGap;
+const slotY = h => branchY - h * slotH;
+const ropeTarget = st => st.length ? st[st.length - 1].h * slotH : 12;
+
+/* ---------- drawing ---------- */
+function drawSky(now) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#141b2e');
+  g.addColorStop(0.55, '#232b47');
+  g.addColorStop(1, '#453f63');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  for (const s of stars) {
+    ctx.globalAlpha = 0.14 + 0.2 * (0.5 + 0.5 * Math.sin(now * 0.0012 + s.ph));
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // moon
+  ctx.fillStyle = 'rgba(240,240,255,.14)';
+  ctx.beginPath(); ctx.arc(W * 0.85, H * 0.14, 34, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(240,240,255,.10)';
+  ctx.beginPath(); ctx.arc(W * 0.85, H * 0.14, 42, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.05)';
+  for (const c of clouds) {
+    for (const [ox, oy, r] of [[-40, 6, 26], [0, 0, 34], [44, 8, 24]]) {
+      ctx.beginPath();
+      ctx.ellipse(c.x + ox * c.s, c.y + oy * c.s, r * c.s * 1.6, r * c.s * 0.62, 0, 0, 7);
+      ctx.fill();
+    }
+  }
+}
+
+function drawBranch() {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = COLORS.branch;
+  ctx.lineWidth = Math.max(12, H * 0.024);
+  ctx.beginPath();
+  ctx.moveTo(-20, branchY + 6);
+  ctx.quadraticCurveTo(W * 0.5, branchY - 6, W + 20, branchY + 10);
+  ctx.stroke();
+  ctx.strokeStyle = COLORS.branchHi;
+  ctx.lineWidth = Math.max(4, H * 0.008);
+  ctx.beginPath();
+  ctx.moveTo(-20, branchY);
+  ctx.quadraticCurveTo(W * 0.5, branchY - 11, W + 20, branchY + 3);
+  ctx.stroke();
+  // a couple of twigs
+  ctx.strokeStyle = COLORS.branch;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(W * 0.68, branchY - 2);
+  ctx.quadraticCurveTo(W * 0.72, branchY + 26, W * 0.7, branchY + 44);
+  ctx.stroke();
+}
+
+function drawRope(p) {
+  const x = poleX(p), h = ropeH[p];
+  if (h < 4) return;
+  const step = 7;
+  for (const [col, lw] of [[COLORS.ropeDark, Math.max(3.4, birdS * 0.22)], [COLORS.rope, Math.max(2.2, birdS * 0.14)]]) {
+    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let y = branchY - 2; y >= branchY - h; y -= step) {
+      const wx = x + Math.sin(y * 0.09 + p * 1.7) * 1.6;
+      y === branchY - 2 ? ctx.moveTo(wx, y) : ctx.lineTo(wx, y);
+    }
+    ctx.stroke();
+  }
+  // anchor ring on the branch
+  ctx.strokeStyle = COLORS.rope; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.ellipse(x, branchY + 3, 6.5, 7.5, 0, 0, 7); ctx.stroke();
+}
+
+function drawBird(x, y, s, type, face, o) {
+  // o: {flap, alpha, tied, dangle}
+  const c = COLORS[type === 'p' ? 'parrot' : 'hawk'];
+  ctx.save();
+  ctx.translate(x, y);
+  if (face < 0) ctx.scale(-1, 1);
+  if (o.alpha !== undefined) ctx.globalAlpha = o.alpha;
+  // tail
+  ctx.fillStyle = c.wing;
+  ctx.beginPath();
+  ctx.moveTo(-s * 0.5, -s * 1.15);
+  ctx.lineTo(-s * 1.95, -s * 0.45);
+  ctx.lineTo(-s * 1.6, -s * 0.05);
+  ctx.lineTo(-s * 0.4, -s * 0.72);
+  ctx.closePath(); ctx.fill();
+  // feet (perched only)
+  if (o.tied) {
+    ctx.strokeStyle = '#d9a05b';
+    ctx.lineWidth = Math.max(1.6, s * 0.1);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(s * 0.12, -s * 0.4); ctx.lineTo(s * 0.2, 0);
+    ctx.moveTo(-s * 0.14, -s * 0.4); ctx.lineTo(-s * 0.08, 0);
+    ctx.stroke();
+  } else if (o.dangle) {
+    // a snipped bit of rope trailing from the belly
+    ctx.strokeStyle = COLORS.rope;
+    ctx.lineWidth = Math.max(2, s * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(-s * 0.1, -s * 0.5);
+    ctx.quadraticCurveTo(-s * 0.45, s * 0.15, -s * 0.25, s * 0.75);
+    ctx.stroke();
+  }
+  // body + belly
+  ctx.fillStyle = c.body;
+  ctx.beginPath(); ctx.ellipse(0, -s, s * 0.92, s * 0.8, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = c.belly;
+  ctx.beginPath(); ctx.ellipse(s * 0.28, -s * 0.78, s * 0.48, s * 0.52, 0, 0, 7); ctx.fill();
+  // head
+  ctx.fillStyle = c.body;
+  ctx.beginPath(); ctx.arc(s * 0.55, -s * 1.8, s * 0.58, 0, 7); ctx.fill();
+  if (type === 'p') {
+    ctx.fillStyle = c.cheek;
+    ctx.beginPath(); ctx.arc(s * 0.55, -s * 1.58, s * 0.17, 0, 7); ctx.fill();
+  }
+  // beak
+  ctx.fillStyle = c.beak;
+  ctx.beginPath();
+  if (type === 'p') {
+    ctx.moveTo(s * 1.02, -s * 1.97);
+    ctx.lineTo(s * 1.48, -s * 1.74);
+    ctx.lineTo(s * 1.0, -s * 1.56);
+  } else {
+    ctx.moveTo(s * 1.0, -s * 2.0);
+    ctx.quadraticCurveTo(s * 1.6, -s * 1.9, s * 1.36, -s * 1.5);
+    ctx.quadraticCurveTo(s * 1.14, -s * 1.56, s * 1.0, -s * 1.62);
+  }
+  ctx.closePath(); ctx.fill();
+  // eye
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(s * 0.66, -s * 1.88, s * 0.17, 0, 7); ctx.fill();
+  ctx.fillStyle = '#1c1c28';
+  ctx.beginPath(); ctx.arc(s * 0.72, -s * 1.88, s * 0.085, 0, 7); ctx.fill();
+  if (type === 'h') {
+    ctx.strokeStyle = c.brow;
+    ctx.lineWidth = s * 0.13; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(s * 0.38, -s * 2.12); ctx.lineTo(s * 0.9, -s * 1.98);
+    ctx.stroke();
+  }
+  // rope tied around the belly
+  if (o.tied) {
+    ctx.strokeStyle = COLORS.rope;
+    ctx.lineWidth = Math.max(2, s * 0.13);
+    ctx.beginPath(); ctx.ellipse(0, -s * 0.95, s * 0.95, s * 0.35, -0.12, 0, 7); ctx.stroke();
+  }
+  // wing (rotates around the shoulder when flapping)
+  ctx.save();
+  ctx.translate(-s * 0.08, -s * 1.18);
+  ctx.rotate(0.32 + (o.flap || 0));
+  ctx.fillStyle = c.wing;
+  ctx.beginPath(); ctx.ellipse(-s * 0.38, s * 0.14, s * 0.72, s * 0.36, 0, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+function birdPos(b, now) {
+  const x = poleX(b.pole) + Math.sin((branchY - b.h * slotH) * 0.09 + b.pole * 1.7) * 1.6;
+  let y = slotY(b.h);
+  y += Math.sin(now * 0.0021 + b.phase) * birdS * 0.06; // idle bob
+  return [x, y];
+}
+
+function bez(p0, p1, p2, t) {
+  const u = 1 - t;
+  return [
+    u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+    u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+  ];
+}
+
+function draw(now) {
+  drawSky(now);
+  drawBranch();
+  for (let p = 0; p < P; p++) drawRope(p);
+  // per-bird effect offsets
+  const off = new Map();
+  for (const e of effects) {
+    const t = Math.min(1, (now - e.t0) / e.dur);
+    if (e.kind === 'lunge') {
+      const [hx, hy] = birdPos(e.hawk, now), [px, py] = birdPos(e.prey, now);
+      const k = Math.sin(Math.PI * t) * 0.32;
+      off.set(e.hawk, [(px - hx) * k, (py - hy) * k]);
+      if (e.tapped !== e.hawk)
+        off.set(e.tapped, [Math.sin(t * 42) * birdS * 0.22 * (1 - t), 0]);
+    } else {
+      off.set(e.bird, [Math.sin(t * 36) * birdS * 0.2 * (1 - t), 0]);
+    }
+  }
+  for (let p = 0; p < P; p++)
+    for (const b of stacks[p]) {
+      const [x, y] = birdPos(b, now);
+      const [dx, dy] = off.get(b) || [0, 0];
+      drawBird(x + dx, y + dy, birdS, b.type, b.face, { tied:true });
+    }
+  for (const f of fliers) {
+    const t = Math.min(1, (now - f.t0) / f.dur);
+    const [x, y] = bez(f.p0, f.p1, f.p2, t * t * (3 - 2 * t));
+    drawBird(x, y, birdS * (1 + t * 0.15), f.bird.type, f.face, {
+      flap: Math.sin(t * 26) * 0.85, dangle: true,
+      alpha: t > 0.85 ? (1 - t) / 0.15 : 1,
+    });
+  }
+  // danger flash between hawk and prey
+  for (const e of effects) {
+    if (e.kind !== 'lunge') continue;
+    const t = Math.min(1, (now - e.t0) / e.dur);
+    const [hx, hy] = birdPos(e.hawk, now), [px, py] = birdPos(e.prey, now);
+    ctx.strokeStyle = COLORS.danger;
+    ctx.globalAlpha = Math.sin(Math.PI * t) * 0.85;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([7, 6]);
+    ctx.beginPath();
+    ctx.moveTo(hx, hy - birdS * 1.6);
+    ctx.lineTo(px, py - birdS * 1.1);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ---------- animation loop ---------- */
+function tick(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000 || 0);
+  lastT = now;
+  for (const c of clouds) {
+    c.x += c.v * c.flip * dt;
+    if (c.x > W + 90) c.x = -90;
+    if (c.x < -90) c.x = W + 90;
+  }
+  for (let p = 0; p < P; p++) {
+    const tgt = ropeTarget(stacks[p]);
+    ropeH[p] += (tgt - ropeH[p]) * Math.min(1, dt * 7);
+  }
+  fliers = fliers.filter(f => {
+    if (now - f.t0 < f.dur) return true;
+    f.bird.state = 'gone';
+    return false;
+  });
+  effects = effects.filter(e => now - e.t0 < e.dur);
+  draw(now);
+  if (!fliers.length && remaining === 0 && !won && !failed) win();
+  requestAnimationFrame(tick);
+}
+
+/* ---------- game flow ---------- */
+function tap(b) {
+  if (won || failed || blockOverlay || b.state !== 'idle') return;
+  const st = stacks[b.pole];
+  if (st[st.length - 1] !== b) {                       // buried: just wiggle
+    effects.push({ kind:'shake', bird:b, t0:performance.now(), dur:320 });
+    return;
+  }
+  taps++;
+  const threat = blockedBy(b);
+  if (!threat) {
+    st.pop();
+    remaining--;
+    b.state = 'fly';
+    const [x, y] = [poleX(b.pole), slotY(b.h)];
+    const face = b.face;
+    fliers.push({
+      bird:b, face,
+      p0:[x, y],
+      p1:[x + face * W * 0.18, y - H * 0.38],
+      p2:[x + face * (W * 0.55 + 120), -birdS * 4],
+      t0:performance.now(), dur:1050,
+    });
+    if (remaining > 0 && !anyLegal()) stuck();
+  } else {
+    lives = Math.max(0, lives - 1);
+    updateLives();
+    effects.push({ kind:'lunge', ...threat, tapped:b, t0:performance.now(), dur:560 });
+    if (lives === 0) setTimeout(fail, 620);
+  }
+}
+
+function updateLives() {
+  [...livesEl.children].forEach((el, i) => el.classList.toggle('lost', i >= lives));
+}
+
+function showOverlay(emoji, msg, sub, btnText, action) {
+  ovEmoji.textContent = emoji;
+  ovMsg.textContent = msg;
+  ovSub.textContent = sub;
+  ovBtn.textContent = btnText;
+  ovBtn.onclick = action;
+  overlay.classList.add('show');
+}
+
+function fail() {
+  if (failed || won) return;
+  failed = true;
+  setTimeout(() => showOverlay('💔', 'Out of hearts!',
+    `Level ${level} · same flock, try again`, 'Retry', newLevel), 350);
+}
+
+function stuck() {
+  failed = true;
+  setTimeout(() => showOverlay('🦅', 'The hawks stand guard!',
+    'No bird can fly safely now · same flock, try another order', 'Retry', newLevel), 800);
+}
+
+function win() {
+  won = true;
+  const secs = Math.round((performance.now() - startTime) / 1000);
+  const perfect = lives === 3;
+  showOverlay(perfect ? '🕊️' : '🎉', perfect ? 'Perfect Rescue!' : 'Flock Freed!',
+    `Level ${level} · ${taps} taps · ${secs}s`, 'Next Level',
+    () => { level++; localStorage.setItem('flockLevel', level); newLevel(); });
+}
+
+function newLevel() {
+  overlay.classList.remove('show');
+  blockOverlay = false;
+  lives = 3; taps = 0; failed = false; won = false;
+  fliers = []; effects = [];
+  updateLives();
+  document.getElementById('levelLabel').textContent = 'Level ' + level;
+  generate(level);
+  startTime = performance.now();
+  layout();
+}
+
+/* ---------- input ---------- */
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  let best = null, bestD = Math.max(birdS * 2.4, 34);
+  for (let p = 0; p < P; p++)
+    for (const b of stacks[p]) {
+      const d = Math.hypot(poleX(p) - mx, slotY(b.h) - birdS - my);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+  if (best) tap(best);
+});
+
+document.getElementById('restartBtn').addEventListener('click', newLevel);
+window.addEventListener('resize', layout);
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+newLevel();
+if (!localStorage.getItem('flockHowTo')) {
+  blockOverlay = true;
+  showOverlay('🐦', 'Free the Flock!',
+    'Tap the top bird on a rope to set it free. Hawks pounce on parrots at their height or below on a neighbouring rope — free the birds in a safe order!',
+    'Play', () => {
+      localStorage.setItem('flockHowTo', '1');
+      overlay.classList.remove('show');
+      blockOverlay = false;
+      startTime = performance.now();
+    });
+}
+requestAnimationFrame(t => { lastT = t; tick(t); });
+</script>
+</body></html>
