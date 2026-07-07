@@ -133,10 +133,10 @@ function generate(lv) {
   rows = Math.min(21, 9 + (lv - 1));
   // several seeded attempts, keep the densest board (still deterministic per level)
   let best = null;
-  for (let att = 0; att < 5; att++) {
+  for (let att = 0; att < 30; att++) {
     const r = genAttempt(lv, att);
     if (!best || r.free < best.free) best = r;
-    if (best.free <= cols * rows * 0.08) break;
+    if (best.free <= cols * rows * 0.03) break;
   }
   occ = best.occ; snakes = best.snakes;
 
@@ -170,15 +170,25 @@ function generate(lv) {
 
 function genAttempt(lv, salt) {
   const rng = mulberry32(lv * 1013904223 + salt * 7919 + 424242);
-  const maxLen = Math.min(30, 5 + lv * 2);
+  // short cap keeps snakes small so the board packs in twice as many arrows
+  const maxLen = Math.min(8, 3 + lv);
   const idx = (x, y) => y * cols + x;
   const inb = (x, y) => x >= 0 && x < cols && y >= 0 && y < rows;
   const occ = new Int16Array(cols * rows).fill(-1);
   const snakes = [];
   let free = cols * rows;
 
+  const freeAround = (x, y, used) => {
+    let n = 0;
+    for (const {dx, dy} of DIRS) {
+      const ax = x + dx, ay = y + dy;
+      if (inb(ax, ay) && occ[idx(ax, ay)] === -1 && !used.has(idx(ax, ay))) n++;
+    }
+    return n;
+  };
+
   // repeated passes over the remaining free cells pack the board tightly
-  for (let pass = 0; pass < 6 && free > 0; pass++) {
+  for (let pass = 0; pass < 12 && free > 0; pass++) {
     const freeCells = [];
     for (let y = 0; y < rows; y++)
       for (let x = 0; x < cols; x++)
@@ -209,7 +219,8 @@ function genAttempt(lv, salt) {
 
     const path = [[hx, hy], [hx - DIRS[dir].dx, hy - DIRS[dir].dy]];
     const used = new Set([idx(hx, hy), idx(path[1][0], path[1][1])]);
-    const targetLen = 2 + ((rng() * maxLen) | 0);
+    // cleanup passes grow greedily so leftover pockets get swallowed
+    const targetLen = pass === 0 ? 2 + ((rng() * maxLen) | 0) : maxLen;
     let [cx, cy] = path[1];
     let lastD = dir; // direction of travel while growing backward is opposite; track step dir cell->cell
     lastD = (dir + 2) % 4;
@@ -225,7 +236,15 @@ function genAttempt(lv, salt) {
       if (!opts.length) break;
       let d;
       if (opts.includes(lastD) && rng() < 0.55) d = lastD;      // bias to straight runs
-      else d = opts[(rng() * opts.length) | 0];
+      else {
+        // otherwise steer into the tightest pocket so fewer stray cells survive
+        d = opts[(rng() * opts.length) | 0];
+        let bestFree = 5;
+        for (const o of opts) {
+          const f = freeAround(cx + DIRS[o].dx, cy + DIRS[o].dy, used);
+          if (f < bestFree || (f === bestFree && rng() < 0.5)) { bestFree = f; d = o; }
+        }
+      }
       cx += DIRS[d].dx; cy += DIRS[d].dy;
       path.push([cx, cy]);
       used.add(idx(cx, cy));
