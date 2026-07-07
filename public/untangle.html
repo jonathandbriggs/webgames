@@ -345,8 +345,8 @@ function drawSnake(s) {
   const color = s.state === 'exit' ? s.bright : s.state === 'bump' ? COLORS.bump : hovered ? s.bright : s.color;
   if (s.state === 'exit') { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.55; }
   else if (hovered) { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.3; }
-  const lw = Math.max(4, cell * 0.3);
-  const headInset = cell * 0.42;
+  const lw = Math.max(3, cell * 0.22);
+  const headInset = cell * 0.34;
   // body polyline from just behind the arrowhead to the tail
   const pts = [trackPoint(s, a + headInset)];
   for (let i = 1; i < s.track.length; i++)
@@ -363,7 +363,7 @@ function drawSnake(s) {
   // arrowhead at the tip, pointing along direction of travel (decreasing arc length)
   const [px, py, tdx, tdy] = trackPoint(s, a);
   const ux = -tdx, uy = -tdy;               // travel direction
-  const size = cell * 0.52;
+  const size = cell * 0.4;
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.moveTo(px + ux * size * 0.62, py + uy * size * 0.62);
