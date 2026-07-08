@@ -129,8 +129,8 @@ function mulberry32(a) {
    snakes already placed, and its body may not cross its own ray.
    Removing a snake only ever frees cells, so no tap order can deadlock. */
 function generate(lv) {
-  cols = Math.min(15, 7 + Math.floor((lv - 1) * 0.7));
-  rows = Math.min(21, 9 + (lv - 1));
+  cols = Math.min(26, 7 + Math.floor((lv - 1) * 0.7));
+  rows = Math.min(38, 9 + (lv - 1));
   // several seeded attempts, keep the densest board (still deterministic per level)
   let best = null;
   for (let att = 0; att < 30; att++) {
@@ -170,8 +170,9 @@ function generate(lv) {
 
 function genAttempt(lv, salt) {
   const rng = mulberry32(lv * 1013904223 + salt * 7919 + 424242);
-  // short cap keeps snakes small so the board packs in twice as many arrows
-  const maxLen = Math.min(8, 3 + lv);
+  // short cap keeps snakes small so the board packs in many arrows;
+  // scale up a little with board area or huge boards go sparse
+  const maxLen = Math.min(8 + ((cols * rows) / 120 | 0), 3 + lv);
   const idx = (x, y) => y * cols + x;
   const inb = (x, y) => x >= 0 && x < cols && y >= 0 && y < rows;
   const occ = new Int16Array(cols * rows).fill(-1);
@@ -188,7 +189,7 @@ function genAttempt(lv, salt) {
   };
 
   // repeated passes over the remaining free cells pack the board tightly
-  for (let pass = 0; pass < 12 && free > 0; pass++) {
+  for (let pass = 0; pass < 16 && free > 0; pass++) {
     const freeCells = [];
     for (let y = 0; y < rows; y++)
       for (let x = 0; x < cols; x++)
@@ -272,7 +273,7 @@ function layout() {
   const dpr = window.devicePixelRatio || 1;
   cv.width = w * dpr; cv.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  cell = Math.max(14, Math.min(48, Math.floor(Math.min((w - 20) / cols, (h - 20) / rows))));
+  cell = Math.max(12, Math.min(48, Math.floor(Math.min((w - 20) / cols, (h - 20) / rows))));
   bx = (w - cols * cell) / 2;
   by = (h - rows * cell) / 2;
   for (const s of snakes) buildTrack(s);
