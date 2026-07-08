@@ -129,14 +129,14 @@ function mulberry32(a) {
    snakes already placed, and its body may not cross its own ray.
    Removing a snake only ever frees cells, so no tap order can deadlock. */
 function generate(lv) {
-  cols = Math.min(15, 7 + Math.floor((lv - 1) * 0.7));
-  rows = Math.min(21, 9 + (lv - 1));
+  cols = Math.min(26, 7 + Math.floor((lv - 1) * 0.7));
+  rows = Math.min(38, 9 + (lv - 1));
   // several seeded attempts, keep the densest board (still deterministic per level)
   let best = null;
-  for (let att = 0; att < 5; att++) {
+  for (let att = 0; att < 30; att++) {
     const r = genAttempt(lv, att);
     if (!best || r.free < best.free) best = r;
-    if (best.free <= cols * rows * 0.08) break;
+    if (best.free <= cols * rows * 0.03) break;
   }
   occ = best.occ; snakes = best.snakes;
 
@@ -170,15 +170,26 @@ function generate(lv) {
 
 function genAttempt(lv, salt) {
   const rng = mulberry32(lv * 1013904223 + salt * 7919 + 424242);
-  const maxLen = Math.min(30, 5 + lv * 2);
+  // short cap keeps snakes small so the board packs in many arrows;
+  // scale up a little with board area or huge boards go sparse
+  const maxLen = Math.min(8 + ((cols * rows) / 120 | 0), 3 + lv);
   const idx = (x, y) => y * cols + x;
   const inb = (x, y) => x >= 0 && x < cols && y >= 0 && y < rows;
   const occ = new Int16Array(cols * rows).fill(-1);
   const snakes = [];
   let free = cols * rows;
 
+  const freeAround = (x, y, used) => {
+    let n = 0;
+    for (const {dx, dy} of DIRS) {
+      const ax = x + dx, ay = y + dy;
+      if (inb(ax, ay) && occ[idx(ax, ay)] === -1 && !used.has(idx(ax, ay))) n++;
+    }
+    return n;
+  };
+
   // repeated passes over the remaining free cells pack the board tightly
-  for (let pass = 0; pass < 6 && free > 0; pass++) {
+  for (let pass = 0; pass < 16 && free > 0; pass++) {
     const freeCells = [];
     for (let y = 0; y < rows; y++)
       for (let x = 0; x < cols; x++)
@@ -209,7 +220,8 @@ function genAttempt(lv, salt) {
 
     const path = [[hx, hy], [hx - DIRS[dir].dx, hy - DIRS[dir].dy]];
     const used = new Set([idx(hx, hy), idx(path[1][0], path[1][1])]);
-    const targetLen = 2 + ((rng() * maxLen) | 0);
+    // cleanup passes grow greedily so leftover pockets get swallowed
+    const targetLen = pass === 0 ? 2 + ((rng() * maxLen) | 0) : maxLen;
     let [cx, cy] = path[1];
     let lastD = dir; // direction of travel while growing backward is opposite; track step dir cell->cell
     lastD = (dir + 2) % 4;
@@ -225,7 +237,15 @@ function genAttempt(lv, salt) {
       if (!opts.length) break;
       let d;
       if (opts.includes(lastD) && rng() < 0.55) d = lastD;      // bias to straight runs
-      else d = opts[(rng() * opts.length) | 0];
+      else {
+        // otherwise steer into the tightest pocket so fewer stray cells survive
+        d = opts[(rng() * opts.length) | 0];
+        let bestFree = 5;
+        for (const o of opts) {
+          const f = freeAround(cx + DIRS[o].dx, cy + DIRS[o].dy, used);
+          if (f < bestFree || (f === bestFree && rng() < 0.5)) { bestFree = f; d = o; }
+        }
+      }
       cx += DIRS[d].dx; cy += DIRS[d].dy;
       path.push([cx, cy]);
       used.add(idx(cx, cy));
@@ -253,7 +273,7 @@ function layout() {
   const dpr = window.devicePixelRatio || 1;
   cv.width = w * dpr; cv.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  cell = Math.max(14, Math.min(48, Math.floor(Math.min((w - 20) / cols, (h - 20) / rows))));
+  cell = Math.max(12, Math.min(48, Math.floor(Math.min((w - 20) / cols, (h - 20) / rows))));
   bx = (w - cols * cell) / 2;
   by = (h - rows * cell) / 2;
   for (const s of snakes) buildTrack(s);
@@ -326,8 +346,8 @@ function drawSnake(s) {
   const color = s.state === 'exit' ? s.bright : s.state === 'bump' ? COLORS.bump : hovered ? s.bright : s.color;
   if (s.state === 'exit') { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.55; }
   else if (hovered) { ctx.shadowColor = s.color; ctx.shadowBlur = cell * 0.3; }
-  const lw = Math.max(4, cell * 0.3);
-  const headInset = cell * 0.42;
+  const lw = Math.max(3, cell * 0.22);
+  const headInset = cell * 0.34;
   // body polyline from just behind the arrowhead to the tail
   const pts = [trackPoint(s, a + headInset)];
   for (let i = 1; i < s.track.length; i++)
@@ -344,7 +364,7 @@ function drawSnake(s) {
   // arrowhead at the tip, pointing along direction of travel (decreasing arc length)
   const [px, py, tdx, tdy] = trackPoint(s, a);
   const ux = -tdx, uy = -tdy;               // travel direction
-  const size = cell * 0.52;
+  const size = cell * 0.4;
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.moveTo(px + ux * size * 0.62, py + uy * size * 0.62);
