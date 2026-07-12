@@ -54,7 +54,7 @@
   }
   #ovEmoji { font-size:64px; line-height:1; }
   #ovMsg { font-size:30px; font-weight:800; color:#fff; }
-  #ovSub { font-size:15px; color:#9aa1bd; max-width:260px; }
+  #ovSub { font-size:15px; color:#9aa1bd; max-width:280px; }
   #ovBtn {
     margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
     padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
@@ -102,7 +102,6 @@ function shade(hex, t) { // t>0 lighten toward white, t<0 darken toward black
   const m = c => Math.round(t >= 0 ? c + (255 - c) * t : c * (1 + t));
   return `rgb(${m(r)},${m(g)},${m(b)})`;
 }
-const easeOut = t => 1 - Math.pow(1 - t, 3);
 const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
 /* ---------- pixel-art patterns (16x16, '#' = accent) ---------- */
@@ -212,7 +211,8 @@ const PATTERNS = [
 ];
 
 const BG = '#3b3d49';
-const ACCENTS = ['#ff2e88','#ffb302','#f5f6fa','#22d3a7','#4d96ff','#b866ff','#ff5c4d'];
+const GOLD_HEX = '#f7b733';
+const ACCENTS = ['#ff2e88','#22d3a7','#f5f6fa','#4d96ff','#b866ff','#ff5c4d'];
 
 /* ---------- dom ---------- */
 const cv = document.getElementById('cv');
@@ -228,101 +228,129 @@ const levelLabel = document.getElementById('levelLabel');
 
 /* ---------- state ---------- */
 let level = Math.max(1, parseInt(localStorage.getItem('octoBlastLevel')) || 1);
-let cols, rows, colors, bricks, claimed, remaining, shadeMap;
-let octos, pads;                 // octos: all turrets; pads: 5 slots holding octo refs or null
-let lives, over;                 // over: '', 'win', 'lose'
+let cols, rows, colors, goldIdx, bricks, claimed, remaining, colorLeft, shadeMap;
+let queue, active, rngQ;         // queue: shop items; active: octopi on / flying to pads
+let pads;                        // pad index -> active octo or null
+let coins, lives, over;          // over: '', 'win', 'lose'
+let yOff, wallSpeed, graceT, shakeT = 0, coinFlash = 0;
 let balls = [], particles = [], confetti = [];
 let W = 0, H = 0, dpr = 1;
-let bw, bd, bf, wallX, wallY;    // brick width, depth (top face), front face height, wall origin
-let padY, padR, padXs = [];      // firing pads
+let bw, bd, bf, wallX, wallY, dangerY;
+let padY, padR, padXs = [];
 let trayTop, octoR, trayCols, trayCellW, trayCellH;
 let wallCv = null, wallDirty = true;
 let rafId = 0, lastT = 0;
 
 const PAD_COUNT = 5;
+const QUEUE_LEN = 8;
 const FIRE_INTERVAL = 0.11;
-const BALL_SPEED = 950;          // px/s along the flight path
+const BALL_SPEED = 950;
+const GOLD_COINS = 6;
+const START_COINS = 120;
 
 /* ---------- level generation ---------- */
 function genLevel() {
   const rng = mulberry32(level * 7919 + 13);
+  rngQ = mulberry32(level * 104729 + 7);
   // keep the wall visually square-ish (cells render bw x 0.72bw) so patterns stay readable
   cols = Math.min(13 + Math.floor(level / 3) * 2, 23);
   rows = Math.round(cols * 1.35);
-  const nColors = Math.min(3 + Math.floor((level - 1) / 3), 5);
+  const nColors = Math.min(2 + Math.floor((level - 1) / 2), 5);
 
   const pool = ACCENTS.slice();
   for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
   colors = [BG, ...pool.slice(0, nColors - 1)];
+  goldIdx = colors.length;
+  colors.push(GOLD_HEX);
 
   // base: background + pattern in color 1.
   // sample in visual space (cells are bw x 0.72bw on screen) so the picture keeps its aspect
   const pat = PATTERNS[Math.floor(rng() * PATTERNS.length)];
   const vw = cols, vh = rows * 0.72;
   const span = Math.min(vw, vh) * 0.98;
-  const ox = (vw - span) / 2, oy = (vh - span) / 2;
+  const sx = (vw - span) / 2, sy = (vh - span) / 2;
   bricks = []; shadeMap = [];
   for (let r = 0; r < rows; r++) {
     bricks.push(new Array(cols)); shadeMap.push(new Array(cols));
     for (let c = 0; c < cols; c++) {
-      const px = Math.floor(((c + 0.5) - ox) / span * 16);
-      const py = Math.floor(((r + 0.5) * 0.72 - oy) / span * 16);
+      const px = Math.floor(((c + 0.5) - sx) / span * 16);
+      const py = Math.floor(((r + 0.5) * 0.72 - sy) / span * 16);
       const on = px >= 0 && px < 16 && py >= 0 && py < 16 && pat[py][px] === '#';
       bricks[r][c] = on ? 1 : 0;
       shadeMap[r][c] = (rng() - .5) * 0.05;
     }
   }
-  // color 2: diagonal stripe across the wall (like the golden trail)
+  // extra accents: border ring, then scattered blobs
   if (nColors >= 3) {
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      if (r === 0 || r === rows - 1 || c === 0 || c === cols - 1) bricks[r][c] = 2;
+  }
+  for (let ci = 3; ci < nColors; ci++) {
+    const nb = 3 + Math.floor(rng() * 3);
+    for (let i = 0; i < nb; i++) {
+      const bc = 1 + rng() * (cols - 2), br = 1 + rng() * (rows - 2), rad = 1.3 + rng() * 1.3;
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+        if ((c - bc) * (c - bc) + (r - br) * (r - br) < rad * rad) bricks[r][c] = ci;
+    }
+  }
+  // a gold vein cutting across everything — bonus coins, any octopus can eat it
+  {
     const slope = (rng() < .5 ? 1 : -1) * (0.6 + rng() * 0.8);
     const k = cols * (0.25 + rng() * 0.5) - (slope < 0 ? slope * rows : 0);
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
-      if (Math.abs(c - (k + slope * r)) < 1.1) bricks[r][c] = 2;
-  }
-  // color 3: border ring
-  if (nColors >= 4) {
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
-      if (r === 0 || r === rows - 1 || c === 0 || c === cols - 1) bricks[r][c] = 3;
-  }
-  // color 4: scattered blobs
-  if (nColors >= 5) {
-    const nb = 3 + Math.floor(rng() * 3);
-    for (let i = 0; i < nb; i++) {
-      const bc = 1 + rng() * (cols - 2), br = 1 + rng() * (rows - 2), rad = 1.2 + rng() * 1.2;
-      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
-        if ((c - bc) * (c - bc) + (r - br) * (r - br) < rad * rad) bricks[r][c] = 4;
-    }
+      if (Math.abs(c - (k + slope * r)) < 1.1) bricks[r][c] = goldIdx;
   }
 
   claimed = bricks.map(row => row.map(() => false));
   remaining = rows * cols;
+  colorLeft = new Array(colors.length).fill(0);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) colorLeft[bricks[r][c]]++;
 
-  // build the turret tray: total ammo per color == brick count of that color
-  const counts = new Array(colors.length).fill(0);
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) counts[bricks[r][c]]++;
-  octos = [];
-  for (let ci = 0; ci < colors.length; ci++) {
-    let left = counts[ci];
-    while (left > 0) {
-      let ammo = Math.min(left, 25 + Math.floor(rng() * 40));
-      if (left - ammo > 0 && left - ammo < 12) ammo = left; // avoid tiny leftovers
-      left -= ammo;
-      octos.push({ color: ci, ammo, state: 'tray', slot: 0, x: 0, y: 0, fx: 0, fy: 0, tx: 0, ty: 0,
-                   t: 0, cool: 0, idle: 0, inflight: 0, shake: 0, bob: rng() * 6.28, pad: -1, pop: 0 });
-    }
-  }
-  for (let i = octos.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [octos[i], octos[j]] = [octos[j], octos[i]]; }
-  octos.forEach((o, i) => o.slot = i);
-
-  pads = new Array(PAD_COUNT).fill(null);
-  balls = []; particles = []; confetti = [];
+  coins = START_COINS;
   lives = 3; over = '';
+  yOff = 0; graceT = 3;
+  wallSpeed = 1 / Math.max(6, 17 - level); // rows per second
+  pads = new Array(PAD_COUNT).fill(null);
+  active = []; balls = []; particles = []; confetti = [];
+
+  queue = [];
+  for (let i = 0; i < QUEUE_LEN; i++) queue.push(genShopItem(i === 0));
+
   levelLabel.textContent = 'Level ' + level;
   [...livesEl.children].forEach(s => s.classList.remove('lost'));
   overlay.classList.remove('show');
   wallDirty = true;
   layout();
   kick();
+}
+
+// weighted by how many bricks of each color remain, so the shop stays useful
+function genShopItem(forceBottomColor) {
+  let color = 0;
+  if (forceBottomColor && bricks[rows - 1]) {
+    // make sure the very first octopus can start eating the bottom row
+    const counts = {};
+    for (let c = 0; c < cols; c++) { const ci = bricks[rows - 1][c]; if (ci !== -1 && ci !== goldIdx) counts[ci] = (counts[ci] || 0) + 1; }
+    let best = -1;
+    for (const k in counts) if (best === -1 || counts[k] > counts[best]) best = k;
+    color = best === -1 ? 0 : +best;
+  } else {
+    // weight by remaining bricks, boosted for colors that are eatable right now
+    const eat = eatableColors();
+    const w = [];
+    let total = 0;
+    for (let ci = 0; ci < goldIdx; ci++) { w[ci] = colorLeft[ci] * (eat.has(ci) ? 3 : 1); total += w[ci]; }
+    if (total === 0) color = Math.floor(rngQ() * goldIdx);
+    else {
+      let pick = rngQ() * total;
+      for (let ci = 0; ci < goldIdx; ci++) { pick -= w[ci]; if (pick <= 0) { color = ci; break; } }
+    }
+  }
+  let ammo = 30 + Math.floor(rngQ() * 46);
+  const need = colorLeft[color] + Math.ceil(colorLeft[goldIdx] / 2);
+  ammo = Math.max(12, Math.min(ammo, need || 12));
+  const price = Math.max(8, Math.ceil(ammo * 0.55));
+  return { color, ammo, price, x: -100, y: -100, shake: 0, fresh: true };
 }
 
 /* ---------- layout ---------- */
@@ -332,45 +360,45 @@ function layout() {
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const wallH = H * 0.55;
+  const wallH = H * 0.52;
   bw = Math.min((W - 20) / cols, wallH / (0.72 * rows + 0.55));
   bd = bw * 0.72; bf = bw * 0.55;
   wallX = (W - cols * bw) / 2;
   wallY = 14;
 
   padR = Math.min(30, W / (PAD_COUNT * 2.6), H * 0.045);
-  padY = wallY + rows * bd + bf + padR + Math.max(14, H * 0.03);
+  dangerY = wallY + rows * bd + bf + Math.max(26, bd * 2.2);
+  padY = dangerY + padR + Math.max(12, H * 0.018);
   const padSpan = Math.min(W - 2 * (padR * 1.4 + 10), PAD_COUNT * padR * 2.7);
   padXs = [];
   for (let i = 0; i < PAD_COUNT; i++)
     padXs.push(W / 2 + (i - (PAD_COUNT - 1) / 2) * padSpan / (PAD_COUNT - 1 || 1));
 
-  trayTop = padY + padR + Math.max(12, H * 0.02);
-  const trayH = H - trayTop - 8;
-  const n = octos.filter(o => o.state !== 'dead').length || 1;
-  trayCols = Math.min(n, Math.max(4, Math.round(W / 74)));
-  const trayRows = Math.ceil(octos.length / trayCols);
-  trayCellW = Math.min(74, (W - 16) / trayCols);
-  trayCellH = Math.min(84, trayH / trayRows);
-  octoR = Math.min(trayCellW, trayCellH) * 0.34;
+  trayTop = padY + padR + Math.max(10, H * 0.014);
+  const trayH = H - trayTop - 6;
+  trayCols = Math.min(QUEUE_LEN, Math.max(4, Math.round(W / 76)));
+  const trayRows = Math.ceil(QUEUE_LEN / trayCols);
+  trayCellW = Math.min(78, (W - 16) / trayCols);
+  trayCellH = Math.min(88, trayH / trayRows);
+  octoR = Math.min(trayCellW, trayCellH) * 0.32;
 
-  for (const o of octos) {
-    const p = trayPos(o.slot);
-    if (o.state === 'tray') { o.x = p.x; o.y = p.y; }
-    o.fx = p.x; o.fy = p.y;
-    if (o.state === 'pad' || o.state === 'toPad') { o.tx = padXs[o.pad]; o.ty = padY; if (o.state === 'pad') { o.x = o.tx; o.y = o.ty; } }
+  queue.forEach((q, i) => { const p = trayPos(i); q.x = p.x; q.y = p.y; });
+  for (const o of active) {
+    o.tx = padXs[o.pad]; o.ty = padY;
+    if (o.state === 'pad') { o.x = o.tx; o.y = o.ty; }
   }
   wallCv = document.createElement('canvas');
-  wallCv.width = cv.width; wallCv.height = cv.height;
+  wallCv.width = Math.max(1, Math.round(cols * bw * dpr));
+  wallCv.height = Math.max(1, Math.round((rows * bd + bf) * dpr));
   wallDirty = true;
   draw();
 }
 function trayPos(slot) {
-  const rowsUsed = Math.ceil(octos.length / trayCols);
   const r = Math.floor(slot / trayCols), c = slot % trayCols;
-  const inRow = (r === rowsUsed - 1) ? (octos.length - r * trayCols) : trayCols;
+  const rowsUsed = Math.ceil(QUEUE_LEN / trayCols);
+  const inRow = (r === rowsUsed - 1) ? (QUEUE_LEN - r * trayCols) : trayCols;
   const x = W / 2 + (c - (inRow - 1) / 2) * trayCellW;
-  return { x, y: trayTop + trayCellH * (r + 0.55) };
+  return { x, y: trayTop + trayCellH * (r + 0.52) };
 }
 
 /* ---------- targeting ---------- */
@@ -383,16 +411,19 @@ function columnTarget(c) {
   }
   return -1;
 }
-function exposedColors() {
+function eatableColors() { // colors that could act right now (gold counts for everyone)
   const set = new Set();
   for (let c = 0; c < cols; c++) { const r = columnTarget(c); if (r >= 0) set.add(bricks[r][c]); }
   return set;
 }
+function canAct(color, set) { return set.has(color) || set.has(goldIdx); }
 function findTarget(o) {
   let best = null, bd2 = Infinity;
   for (let c = 0; c < cols; c++) {
     const r = columnTarget(c);
-    if (r < 0 || bricks[r][c] !== o.color) continue;
+    if (r < 0) continue;
+    const ci = bricks[r][c];
+    if (ci !== o.color && ci !== goldIdx) continue;
     const p = brickCenter(c, r);
     const d2 = (p.x - o.x) * (p.x - o.x) + (p.y - o.y) * (p.y - o.y);
     if (d2 < bd2) { bd2 = d2; best = { c, r, x: p.x, y: p.y }; }
@@ -400,48 +431,52 @@ function findTarget(o) {
   return best;
 }
 function brickCenter(c, r) {
-  return { x: wallX + (c + 0.5) * bw, y: wallY + r * bd + bd * 0.5 + bf * 0.5 };
+  return { x: wallX + (c + 0.5) * bw, y: wallY + yOff + r * bd + bd * 0.5 + bf * 0.5 };
 }
 
 /* ---------- actions ---------- */
-function deploy(o) {
+function buy(qi) {
   if (over) return;
+  const item = queue[qi];
   const free = pads.indexOf(null);
-  if (free === -1) { o.shake = 0.4; kick(); return; }
-  if (!exposedColors().has(o.color)) {
-    o.shake = 0.5;
-    loseLife();
+  if (free === -1 || coins < item.price) {
+    item.shake = 0.4;
+    if (coins < item.price) coinFlash = 0.6;
     kick();
     return;
   }
-  o.pad = free; pads[free] = o;
-  o.state = 'toPad'; o.t = 0;
-  o.fx = o.x; o.fy = o.y; o.tx = padXs[free]; o.ty = padY;
-  o.cool = 0.15; o.idle = 0;
-  kick();
-}
-function recall(o) {
-  if (o.state !== 'pad') return;
-  pads[o.pad] = null;
-  o.pad = -1;
-  const p = trayPos(o.slot);
-  o.state = 'toTray'; o.t = 0; o.fx = o.x; o.fy = o.y; o.tx = p.x; o.ty = p.y;
+  coins -= item.price;
+  const o = { color: item.color, ammo: item.ammo, state: 'toPad', pad: free,
+              x: item.x, y: item.y, fx: item.x, fy: item.y, tx: padXs[free], ty: padY,
+              t: 0, cool: 0.15, bob: Math.random() * 6.28, inflight: 0, shake: 0 };
+  pads[free] = o;
+  active.push(o);
+  queue.splice(qi, 1);
+  const next = genShopItem(false);
+  const p = trayPos(QUEUE_LEN - 1);
+  next.x = p.x + trayCellW; next.y = p.y; // slide in from the right
+  queue.push(next);
   kick();
 }
 function loseLife() {
   if (over) return;
   lives--;
+  shakeT = 0.5;
   const hearts = livesEl.children;
   if (hearts[lives]) hearts[lives].classList.add('lost');
   if (lives <= 0) endGame(false);
 }
-function destroyBrick(c, r) {
+function destroyBrick(c, r, earn) {
   if (bricks[r][c] === -1) return;
-  const color = colors[bricks[r][c]];
-  bricks[r][c] = -1; claimed[r][c] = false; remaining--;
+  const ci = bricks[r][c];
+  const color = colors[ci];
+  bricks[r][c] = -1; claimed[r][c] = false;
+  remaining--; colorLeft[ci]--;
+  if (earn) coins += ci === goldIdx ? GOLD_COINS : 1;
   wallDirty = true;
   const p = brickCenter(c, r);
-  for (let i = 0; i < 7; i++) {
+  const burst = ci === goldIdx ? 10 : 7;
+  for (let i = 0; i < burst; i++) {
     const a = Math.random() * 6.28, s = 60 + Math.random() * 160;
     particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60,
                      life: 0.5 + Math.random() * 0.3, t: 0, size: bw * (0.14 + Math.random() * 0.2), color });
@@ -459,10 +494,10 @@ function endGame(win) {
                       color: colors[1 + Math.floor(Math.random() * (colors.length - 1))] });
   }
   setTimeout(() => {
-    ovEmoji.textContent = win ? '🐙' : '💔';
-    ovMsg.textContent = win ? 'Wall Cleared!' : 'Out of Hearts';
-    ovSub.textContent = win ? `Level ${level} demolished. The octopi are proud.`
-                            : 'Only deploy an octopus when its color shows at the front of the wall.';
+    ovEmoji.textContent = win ? '🐙' : '🧱';
+    ovMsg.textContent = win ? 'Wall Cleared!' : 'Crushed!';
+    ovSub.textContent = win ? `Level ${level} demolished with ${coins} coins to spare.`
+                            : 'The wall reached your octopi. Keep its bottom edge chewed back above the red line!';
     ovBtn.textContent = win ? 'Next Level' : 'Retry';
     overlay.classList.add('show');
   }, win ? 900 : 500);
@@ -471,28 +506,52 @@ function endGame(win) {
 
 /* ---------- simulation ---------- */
 function tick(dt) {
-  let active = confetti.length > 0 || balls.length > 0 || particles.length > 0;
+  let activity = confetti.length > 0 || balls.length > 0 || particles.length > 0 || shakeT > 0 || !over;
+  if (shakeT > 0) shakeT -= dt;
+  if (coinFlash > 0) coinFlash -= dt;
 
-  for (const o of octos) {
-    if (o.shake > 0) { o.shake -= dt; active = true; }
-    if (o.state === 'toPad' || o.state === 'toTray') {
-      o.t += dt / 0.4; active = true;
-      if (o.t >= 1) {
-        o.x = o.tx; o.y = o.ty;
-        o.state = o.state === 'toPad' ? 'pad' : 'tray';
-      } else {
+  // the wall creeps down toward the pads
+  if (!over) {
+    if (graceT > 0) graceT -= dt;
+    else yOff += wallSpeed * bd * dt;
+    // breach: any brick whose front face crosses the danger line pops and costs a heart
+    let breached = false;
+    for (let c = 0; c < cols; c++) {
+      for (let r = rows - 1; r >= 0; r--) {
+        if (bricks[r][c] === -1) continue;
+        if (wallY + yOff + (r + 1) * bd + bf > dangerY) { destroyBrick(c, r, false); breached = true; }
+        break; // only the lowest brick of each column can breach
+      }
+    }
+    if (breached) loseLife();
+  }
+
+  for (const q of queue) {
+    if (q.shake > 0) { q.shake -= dt; activity = true; }
+    const idx = queue.indexOf(q), p = trayPos(idx);
+    q.x += (p.x - q.x) * Math.min(1, dt * 10);
+    q.y += (p.y - q.y) * Math.min(1, dt * 10);
+  }
+
+  for (let i = active.length - 1; i >= 0; i--) {
+    const o = active[i];
+    if (o.shake > 0) o.shake -= dt;
+    if (o.state === 'toPad') {
+      o.t += dt / 0.4;
+      if (o.t >= 1) { o.x = o.tx; o.y = o.ty; o.state = 'pad'; }
+      else {
         const e = easeInOut(o.t);
         o.x = o.fx + (o.tx - o.fx) * e;
         o.y = o.fy + (o.ty - o.fy) * e - Math.sin(o.t * Math.PI) * 46;
       }
     } else if (o.state === 'pad') {
-      o.bob += dt * 7; active = true;
+      o.bob += dt * 7;
       if (over) continue;
       o.cool -= dt;
       if (o.cool <= 0 && o.ammo > 0) {
         const tg = findTarget(o);
         if (tg) {
-          o.idle = 0; o.cool = FIRE_INTERVAL;
+          o.cool = FIRE_INTERVAL;
           claimed[tg.r][tg.c] = true;
           o.ammo--; o.inflight++;
           const sx = o.x, sy = o.y - octoR * 1.5;
@@ -500,19 +559,17 @@ function tick(dt) {
           balls.push({ sx, sy, tx: tg.x, ty: tg.y,
                        cx: (sx + tg.x) / 2 + (sx < tg.x ? -1 : 1) * dist * 0.12, cy: (sy + tg.y) / 2,
                        t: 0, dur: Math.max(0.16, dist / BALL_SPEED),
-                       color: colors[o.color], c: tg.c, r: tg.r, o, trail: [] });
-        } else {
-          o.idle += dt;
-          if (o.idle > 0.7 && o.inflight === 0 && o.ammo > 0) recall(o);
+                       color: colors[o.color], c: tg.c, r: tg.r, o });
         }
       }
-      if (o.ammo <= 0 && o.inflight === 0 && o.state === 'pad') {
-        o.state = 'dying'; o.t = 0;
+      if (o.ammo <= 0 && o.inflight === 0) {
+        // spent: hop off the pad and dive away
+        o.state = 'dying'; o.vy = -340;
         pads[o.pad] = null; o.pad = -1;
       }
     } else if (o.state === 'dying') {
-      o.t += dt / 0.35; active = true;
-      if (o.t >= 1) o.state = 'dead';
+      o.vy += 1500 * dt; o.y += o.vy * dt;
+      if (o.y - octoR * 2 > H) active.splice(i, 1);
     }
   }
 
@@ -522,11 +579,12 @@ function tick(dt) {
     const t = Math.min(1, b.t), u = 1 - t;
     b.x = u * u * b.sx + 2 * u * t * b.cx + t * t * b.tx;
     b.y = u * u * b.sy + 2 * u * t * b.cy + t * t * b.ty;
+    if (!b.trail) b.trail = [];
     b.trail.push(b.x, b.y);
     if (b.trail.length > 12) b.trail.splice(0, 2);
     if (b.t >= 1) {
       b.o.inflight--;
-      destroyBrick(b.c, b.r);
+      destroyBrick(b.c, b.r, true);
       balls.splice(i, 1);
     }
   }
@@ -543,26 +601,21 @@ function tick(dt) {
     f.y += f.vy * dt; f.x += f.vx * dt + Math.sin(f.y * 0.02) * 40 * dt; f.rot += f.vr * dt;
     if (f.y > H + 30) confetti.splice(i, 1);
   }
-  return active;
+  return activity;
 }
 
 /* ---------- drawing ---------- */
 function drawWallCache() {
   const g = wallCv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, W, H);
-  // floor panel under the wall
-  g.fillStyle = 'rgba(0,0,0,.28)';
-  g.beginPath();
-  g.roundRect(wallX - 6, wallY - 6, cols * bw + 12, rows * bd + bf + 12, 10);
-  g.fill();
+  g.clearRect(0, 0, cols * bw, rows * bd + bf);
   const gap = Math.max(1, bw * 0.06);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const ci = bricks[r][c];
       if (ci === -1) continue;
       const base = colors[ci], sh = shadeMap[r][c];
-      const x = wallX + c * bw, y = wallY + r * bd;
+      const x = c * bw, y = r * bd;
       // front face (visible when the brick in front is gone, or it's the front row)
       if (r === rows - 1 || bricks[r + 1][c] === -1) {
         g.fillStyle = shade(base, -0.42 + sh);
@@ -575,16 +628,19 @@ function drawWallCache() {
       g.fillRect(x, y, bw - gap, bd - gap);
       g.fillStyle = 'rgba(255,255,255,.08)';
       g.fillRect(x, y, bw - gap, Math.max(1, bd * 0.14));
+      if (ci === goldIdx) { // sparkle so gold reads as treasure
+        g.fillStyle = 'rgba(255,255,255,.45)';
+        g.fillRect(x + bw * 0.18, y + bd * 0.22, Math.max(1.5, bw * 0.1), Math.max(1.5, bw * 0.1));
+      }
     }
   }
   wallDirty = false;
 }
 
-function drawOcto(o, r) {
+function drawOcto(o, r, dim) {
   const x = o.x + (o.shake > 0 ? Math.sin(o.shake * 55) * 5 : 0);
-  let y = o.y, sc = 1, alpha = 1;
+  let y = o.y, sc = 1, alpha = dim ? 0.45 : 1;
   if (o.state === 'pad') { y += Math.sin(o.bob) * 2.5; sc = 1.12; }
-  if (o.state === 'dying') { sc = 1 + o.t * 0.6; alpha = 1 - o.t; }
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, y); ctx.scale(sc, sc);
@@ -638,13 +694,44 @@ function drawOcto(o, r) {
   ctx.restore();
 }
 
+function drawPriceTag(q, r) {
+  const ok = coins >= q.price;
+  const x = q.x + (q.shake > 0 ? Math.sin(q.shake * 55) * 5 : 0) + r * 0.95;
+  const y = q.y - r * 1.05;
+  const txt = String(q.price);
+  ctx.font = `800 ${Math.round(r * 0.48)}px system-ui, sans-serif`;
+  const tw = ctx.measureText(txt).width;
+  const bh = r * 0.62, bwd = tw + bh * 1.25;
+  ctx.fillStyle = ok ? '#f7b733' : '#5b5e6b';
+  ctx.beginPath(); ctx.roundRect(x - bh * 0.55, y - bh / 2, bwd, bh, bh / 2); ctx.fill();
+  ctx.fillStyle = ok ? '#8a5a00' : '#2c2d36';
+  ctx.beginPath(); ctx.arc(x, y, bh * 0.3, 0, 6.29); ctx.fill();
+  ctx.fillStyle = ok ? '#3d2a00' : '#c9ccd8';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(txt, x + bh * 0.42, y + 1);
+}
+
 function draw() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  if (shakeT > 0) ctx.translate((Math.random() - .5) * 8 * shakeT, (Math.random() - .5) * 8 * shakeT);
+
+  // wall (cached), sliding down over time
   if (wallDirty) drawWallCache();
-  ctx.drawImage(wallCv, 0, 0, W, H);
+  ctx.drawImage(wallCv, 0, 0, wallCv.width, wallCv.height, wallX, wallY + yOff, cols * bw, rows * bd + bf);
+
+  // danger line
+  const pulse = 0.55 + 0.35 * Math.sin(performance.now() / 300);
+  ctx.strokeStyle = `rgba(255,77,87,${pulse})`;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([9, 7]);
+  ctx.beginPath();
+  ctx.moveTo(wallX - 4, dangerY); ctx.lineTo(wallX + cols * bw + 4, dangerY);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
   // pads
-  const exposed = over ? new Set() : exposedColors();
+  const eat = over ? new Set() : eatableColors();
   for (let i = 0; i < PAD_COUNT; i++) {
     ctx.fillStyle = 'rgba(255,255,255,.12)';
     ctx.beginPath();
@@ -652,11 +739,11 @@ function draw() {
     ctx.fill();
   }
 
-  // balls (under octos, over wall)
+  // balls
   for (const b of balls) {
     ctx.strokeStyle = 'rgba(255,255,255,.5)';
     ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-    if (b.trail.length >= 4) {
+    if (b.trail && b.trail.length >= 4) {
       ctx.beginPath();
       ctx.moveTo(b.trail[0], b.trail[1]);
       for (let i = 2; i < b.trail.length; i += 2) ctx.lineTo(b.trail[i], b.trail[i + 1]);
@@ -668,32 +755,46 @@ function draw() {
 
   // particles
   for (const p of particles) {
-    ctx.globalAlpha = 1 - p.t / p.life;
+    ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
     ctx.fillStyle = p.color;
     ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
   }
   ctx.globalAlpha = 1;
 
-  // tray octos first (behind), then travelling/pad ones
-  for (const o of octos) {
-    if (o.state === 'dead') continue;
-    if (o.state === 'tray') {
-      // deployable hint: a lit pad under octopi that can act right now
-      if (!over && exposed.has(o.color)) {
-        ctx.fillStyle = 'rgba(255,255,255,.16)';
-        ctx.beginPath();
-        ctx.ellipse(o.x, o.y + octoR * 0.95, octoR * 1.35, octoR * 0.5, 0, 0, 6.29);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,.5)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-      drawOcto(o, octoR);
+  // shop queue
+  for (const q of queue) {
+    const affordable = coins >= q.price;
+    if (!over && affordable && canAct(q.color, eat)) {
+      ctx.fillStyle = 'rgba(255,255,255,.16)';
+      ctx.beginPath();
+      ctx.ellipse(q.x, q.y + octoR * 0.95, octoR * 1.35, octoR * 0.5, 0, 0, 6.29);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.5)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
     }
+    drawOcto(q, octoR, !affordable);
+    drawPriceTag(q, octoR);
   }
-  for (const o of octos) {
-    if (o.state === 'dead' || o.state === 'tray') continue;
-    drawOcto(o, octoR * 1.06);
+  // octopi on pads / in flight
+  for (const o of active) drawOcto(o, octoR * 1.06, false);
+
+  // coin counter
+  {
+    const r = 11;
+    const txt = String(coins);
+    ctx.font = `800 17px system-ui, sans-serif`;
+    const tw = ctx.measureText(txt).width;
+    const x = 12, y = 16, h = 30;
+    ctx.fillStyle = coinFlash > 0 && Math.sin(coinFlash * 25) > 0 ? 'rgba(255,77,87,.85)' : 'rgba(0,0,0,.55)';
+    ctx.beginPath(); ctx.roundRect(x, y, tw + h + 14, h, h / 2); ctx.fill();
+    ctx.fillStyle = '#f7b733';
+    ctx.beginPath(); ctx.arc(x + h / 2 + 2, y + h / 2, r, 0, 6.29); ctx.fill();
+    ctx.fillStyle = '#8a5a00';
+    ctx.beginPath(); ctx.arc(x + h / 2 + 2, y + h / 2, r * 0.55, 0, 6.29); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(txt, x + h + 4, y + h / 2 + 1);
   }
 
   // confetti
@@ -710,9 +811,9 @@ function draw() {
 function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
   lastT = t;
-  const active = tick(dt);
+  const activity = tick(dt);
   draw();
-  if (active) rafId = requestAnimationFrame(frame);
+  if (activity) rafId = requestAnimationFrame(frame);
   else rafId = 0;
 }
 function kick() {
@@ -724,19 +825,18 @@ cv.addEventListener('pointerdown', e => {
   if (over) return;
   const rect = cv.getBoundingClientRect();
   const x = e.clientX - rect.left, y = e.clientY - rect.top;
-  // pad octos: tap to recall
-  for (const o of octos) {
+  // octopi on launchers are committed — a tap just makes them wiggle
+  for (const o of active) {
     if (o.state !== 'pad') continue;
-    if (Math.hypot(x - o.x, y - o.y) < octoR * 1.7) { recall(o); return; }
+    if (Math.hypot(x - o.x, y - o.y) < octoR * 1.7) { o.shake = 0.35; kick(); return; }
   }
-  // tray octos: tap to deploy
-  let best = null, bd2 = Infinity;
-  for (const o of octos) {
-    if (o.state !== 'tray') continue;
-    const d2 = (x - o.x) * (x - o.x) + (y - o.y) * (y - o.y);
-    if (d2 < bd2) { bd2 = d2; best = o; }
-  }
-  if (best && bd2 < (trayCellW * 0.7) ** 2) deploy(best);
+  // queue: tap to buy
+  let best = -1, bd2 = Infinity;
+  queue.forEach((q, i) => {
+    const d2 = (x - q.x) * (x - q.x) + (y - q.y) * (y - q.y);
+    if (d2 < bd2) { bd2 = d2; best = i; }
+  });
+  if (best >= 0 && bd2 < (trayCellW * 0.7) ** 2) buy(best);
 });
 
 ovBtn.addEventListener('click', () => {
