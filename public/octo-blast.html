@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14141f">
+<title>Octo Blast</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    background:#14141f; color:#dfe3f0;
+    font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+    display:flex; flex-direction:column;
+  }
+  header {
+    height:56px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px; border-bottom:2px solid rgba(255,255,255,.07);
+  }
+  #lives { display:flex; gap:7px; font-size:21px; }
+  #lives span { transition:opacity .35s, filter .35s, transform .35s; }
+  #lives span.lost { opacity:.22; filter:grayscale(1); transform:scale(.85); }
+  .header-center { display:flex; flex-direction:column; align-items:center; gap:1px; }
+  .title { font-weight:800; letter-spacing:2px; font-size:14px; color:#666; text-transform:uppercase; }
+  #levelLabel { font-weight:800; font-size:18px; color:#aab2d0; letter-spacing:1px; }
+  #restartBtn {
+    background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
+    border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
+    touch-action:manipulation;
+  }
+  #restartBtn:active { transform:scale(.94); }
+  #headerRight { display:flex; align-items:center; gap:8px; }
+  #menuBtn {
+    background:none; border:2px solid rgba(255,255,255,.18); color:#dfe3f0;
+    border-radius:10px; padding:6px 12px; font-size:16px; font-weight:700; cursor:pointer;
+    text-decoration:none; touch-action:manipulation;
+  }
+  #menuBtn:active { transform:scale(.94); }
+  #stage { flex:1; position:relative; overflow:hidden; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; gap:14px;
+    align-items:center; justify-content:center; text-align:center;
+    background:rgba(8,8,14,.6); backdrop-filter:blur(3px);
+    opacity:0; pointer-events:none; transition:opacity .35s;
+  }
+  #overlay.show { opacity:1; pointer-events:auto; }
+  #ovCard {
+    background:#20212f; border-radius:22px; padding:34px 44px;
+    box-shadow:0 12px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+  }
+  #ovEmoji { font-size:64px; line-height:1; }
+  #ovMsg { font-size:30px; font-weight:800; color:#fff; }
+  #ovSub { font-size:15px; color:#9aa1bd; max-width:260px; }
+  #ovBtn {
+    margin-top:8px; background:#e0762e; color:#fff; border:0; border-radius:14px;
+    padding:13px 36px; font-size:19px; font-weight:800; cursor:pointer;
+    box-shadow:0 4px 0 #b55a1c; touch-action:manipulation;
+  }
+  #ovBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #b55a1c; }
+</style>
+</head>
+<body>
+<header>
+  <a id="menuBtn" href="index.html">☰</a>
+  <div class="header-center">
+    <span class="title">Octo Blast</span>
+    <div id="levelLabel">Level 1</div>
+  </div>
+  <div id="headerRight">
+    <div id="lives"><span>❤️</span><span>❤️</span><span>❤️</span></div>
+    <button id="restartBtn">↻</button>
+  </div>
+</header>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="overlay">
+  <div id="ovCard">
+    <div id="ovEmoji">🐙</div>
+    <div id="ovMsg">Wall Cleared!</div>
+    <div id="ovSub"></div>
+    <button id="ovBtn">Next Level</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- helpers ---------- */
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function shade(hex, t) { // t>0 lighten toward white, t<0 darken toward black
+  const n = parseInt(hex.slice(1), 16), r = n >> 16 & 255, g = n >> 8 & 255, b = n & 255;
+  const m = c => Math.round(t >= 0 ? c + (255 - c) * t : c * (1 + t));
+  return `rgb(${m(r)},${m(g)},${m(b)})`;
+}
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+/* ---------- pixel-art patterns (16x16, '#' = accent) ---------- */
+const PATTERNS = [
+[ // heart
+"................",
+"................",
+"..###......###..",
+".#####....#####.",
+"#######..#######",
+"################",
+"################",
+"################",
+".##############.",
+".##############.",
+"..############..",
+"...##########...",
+".....######.....",
+"......####......",
+".......##.......",
+"................"],
+[ // butterfly
+"................",
+".###........###",
+"#####......####.",
+"#######...#####.",
+".########.#####.",
+".########.####..",
+"..############..",
+"....##.##.##....",
+"....##.##.##....",
+"..############..",
+".########.####..",
+".########.#####.",
+"#######...#####.",
+"#####......####.",
+".###........###",
+"................"],
+[ // star
+".......##.......",
+".......##.......",
+"......####......",
+"......####......",
+".....######.....",
+"################",
+".##############.",
+"..############..",
+"...##########...",
+"....########....",
+"....########....",
+"...####..####...",
+"...###....###...",
+"..##........##..",
+"..#..........#..",
+"................"],
+[ // space invader
+"................",
+"...#........#...",
+"....#......#....",
+"...##########...",
+"..##.######.##..",
+".##############.",
+"#.############.#",
+"#.############.#",
+"#.############.#",
+"#..##########..#",
+"...##########...",
+"....##....##....",
+"...##......##...",
+"..##........##..",
+".##..........##.",
+"................"],
+[ // flower
+"......####......",
+".....######.....",
+"..##.######.##..",
+".####.####.####.",
+".#####.##.#####.",
+"..#####..#####..",
+"....###..###....",
+"##.....##.....##",
+"##.....##.....##",
+"....###..###....",
+"..#####..#####..",
+".#####.##.#####.",
+".####.####.####.",
+"..##.######.##..",
+".....######.....",
+"......####......"],
+[ // diamond
+".......##.......",
+"......####......",
+".....######.....",
+"....########....",
+"...##########...",
+"..############..",
+".##############.",
+"################",
+"################",
+".##############.",
+"..############..",
+"...##########...",
+"....########....",
+".....######.....",
+"......####......",
+".......##......."],
+];
+
+const BG = '#3b3d49';
+const ACCENTS = ['#ff2e88','#ffb302','#f5f6fa','#22d3a7','#4d96ff','#b866ff','#ff5c4d'];
+
+/* ---------- dom ---------- */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const stage = document.getElementById('stage');
+const overlay = document.getElementById('overlay');
+const ovEmoji = document.getElementById('ovEmoji');
+const ovMsg = document.getElementById('ovMsg');
+const ovSub = document.getElementById('ovSub');
+const ovBtn = document.getElementById('ovBtn');
+const livesEl = document.getElementById('lives');
+const levelLabel = document.getElementById('levelLabel');
+
+/* ---------- state ---------- */
+let level = Math.max(1, parseInt(localStorage.getItem('octoBlastLevel')) || 1);
+let cols, rows, colors, bricks, claimed, remaining, shadeMap;
+let octos, pads;                 // octos: all turrets; pads: 5 slots holding octo refs or null
+let lives, over;                 // over: '', 'win', 'lose'
+let balls = [], particles = [], confetti = [];
+let W = 0, H = 0, dpr = 1;
+let bw, bd, bf, wallX, wallY;    // brick width, depth (top face), front face height, wall origin
+let padY, padR, padXs = [];      // firing pads
+let trayTop, octoR, trayCols, trayCellW, trayCellH;
+let wallCv = null, wallDirty = true;
+let rafId = 0, lastT = 0;
+
+const PAD_COUNT = 5;
+const FIRE_INTERVAL = 0.11;
+const BALL_SPEED = 950;          // px/s along the flight path
+
+/* ---------- level generation ---------- */
+function genLevel() {
+  const rng = mulberry32(level * 7919 + 13);
+  // keep the wall visually square-ish (cells render bw x 0.72bw) so patterns stay readable
+  cols = Math.min(13 + Math.floor(level / 3) * 2, 23);
+  rows = Math.round(cols * 1.35);
+  const nColors = Math.min(3 + Math.floor((level - 1) / 3), 5);
+
+  const pool = ACCENTS.slice();
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  colors = [BG, ...pool.slice(0, nColors - 1)];
+
+  // base: background + pattern in color 1.
+  // sample in visual space (cells are bw x 0.72bw on screen) so the picture keeps its aspect
+  const pat = PATTERNS[Math.floor(rng() * PATTERNS.length)];
+  const vw = cols, vh = rows * 0.72;
+  const span = Math.min(vw, vh) * 0.98;
+  const ox = (vw - span) / 2, oy = (vh - span) / 2;
+  bricks = []; shadeMap = [];
+  for (let r = 0; r < rows; r++) {
+    bricks.push(new Array(cols)); shadeMap.push(new Array(cols));
+    for (let c = 0; c < cols; c++) {
+      const px = Math.floor(((c + 0.5) - ox) / span * 16);
+      const py = Math.floor(((r + 0.5) * 0.72 - oy) / span * 16);
+      const on = px >= 0 && px < 16 && py >= 0 && py < 16 && pat[py][px] === '#';
+      bricks[r][c] = on ? 1 : 0;
+      shadeMap[r][c] = (rng() - .5) * 0.05;
+    }
+  }
+  // color 2: diagonal stripe across the wall (like the golden trail)
+  if (nColors >= 3) {
+    const slope = (rng() < .5 ? 1 : -1) * (0.6 + rng() * 0.8);
+    const k = cols * (0.25 + rng() * 0.5) - (slope < 0 ? slope * rows : 0);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      if (Math.abs(c - (k + slope * r)) < 1.1) bricks[r][c] = 2;
+  }
+  // color 3: border ring
+  if (nColors >= 4) {
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+      if (r === 0 || r === rows - 1 || c === 0 || c === cols - 1) bricks[r][c] = 3;
+  }
+  // color 4: scattered blobs
+  if (nColors >= 5) {
+    const nb = 3 + Math.floor(rng() * 3);
+    for (let i = 0; i < nb; i++) {
+      const bc = 1 + rng() * (cols - 2), br = 1 + rng() * (rows - 2), rad = 1.2 + rng() * 1.2;
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+        if ((c - bc) * (c - bc) + (r - br) * (r - br) < rad * rad) bricks[r][c] = 4;
+    }
+  }
+
+  claimed = bricks.map(row => row.map(() => false));
+  remaining = rows * cols;
+
+  // build the turret tray: total ammo per color == brick count of that color
+  const counts = new Array(colors.length).fill(0);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) counts[bricks[r][c]]++;
+  octos = [];
+  for (let ci = 0; ci < colors.length; ci++) {
+    let left = counts[ci];
+    while (left > 0) {
+      let ammo = Math.min(left, 25 + Math.floor(rng() * 40));
+      if (left - ammo > 0 && left - ammo < 12) ammo = left; // avoid tiny leftovers
+      left -= ammo;
+      octos.push({ color: ci, ammo, state: 'tray', slot: 0, x: 0, y: 0, fx: 0, fy: 0, tx: 0, ty: 0,
+                   t: 0, cool: 0, idle: 0, inflight: 0, shake: 0, bob: rng() * 6.28, pad: -1, pop: 0 });
+    }
+  }
+  for (let i = octos.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [octos[i], octos[j]] = [octos[j], octos[i]]; }
+  octos.forEach((o, i) => o.slot = i);
+
+  pads = new Array(PAD_COUNT).fill(null);
+  balls = []; particles = []; confetti = [];
+  lives = 3; over = '';
+  levelLabel.textContent = 'Level ' + level;
+  [...livesEl.children].forEach(s => s.classList.remove('lost'));
+  overlay.classList.remove('show');
+  wallDirty = true;
+  layout();
+  kick();
+}
+
+/* ---------- layout ---------- */
+function layout() {
+  dpr = window.devicePixelRatio || 1;
+  W = stage.clientWidth; H = stage.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const wallH = H * 0.55;
+  bw = Math.min((W - 20) / cols, wallH / (0.72 * rows + 0.55));
+  bd = bw * 0.72; bf = bw * 0.55;
+  wallX = (W - cols * bw) / 2;
+  wallY = 14;
+
+  padR = Math.min(30, W / (PAD_COUNT * 2.6), H * 0.045);
+  padY = wallY + rows * bd + bf + padR + Math.max(14, H * 0.03);
+  const padSpan = Math.min(W - 2 * (padR * 1.4 + 10), PAD_COUNT * padR * 2.7);
+  padXs = [];
+  for (let i = 0; i < PAD_COUNT; i++)
+    padXs.push(W / 2 + (i - (PAD_COUNT - 1) / 2) * padSpan / (PAD_COUNT - 1 || 1));
+
+  trayTop = padY + padR + Math.max(12, H * 0.02);
+  const trayH = H - trayTop - 8;
+  const n = octos.filter(o => o.state !== 'dead').length || 1;
+  trayCols = Math.min(n, Math.max(4, Math.round(W / 74)));
+  const trayRows = Math.ceil(octos.length / trayCols);
+  trayCellW = Math.min(74, (W - 16) / trayCols);
+  trayCellH = Math.min(84, trayH / trayRows);
+  octoR = Math.min(trayCellW, trayCellH) * 0.34;
+
+  for (const o of octos) {
+    const p = trayPos(o.slot);
+    if (o.state === 'tray') { o.x = p.x; o.y = p.y; }
+    o.fx = p.x; o.fy = p.y;
+    if (o.state === 'pad' || o.state === 'toPad') { o.tx = padXs[o.pad]; o.ty = padY; if (o.state === 'pad') { o.x = o.tx; o.y = o.ty; } }
+  }
+  wallCv = document.createElement('canvas');
+  wallCv.width = cv.width; wallCv.height = cv.height;
+  wallDirty = true;
+  draw();
+}
+function trayPos(slot) {
+  const rowsUsed = Math.ceil(octos.length / trayCols);
+  const r = Math.floor(slot / trayCols), c = slot % trayCols;
+  const inRow = (r === rowsUsed - 1) ? (octos.length - r * trayCols) : trayCols;
+  const x = W / 2 + (c - (inRow - 1) / 2) * trayCellW;
+  return { x, y: trayTop + trayCellH * (r + 0.55) };
+}
+
+/* ---------- targeting ---------- */
+// lowest existing, unclaimed brick of a column (claims grow bottom-up, so it's always reachable)
+function columnTarget(c) {
+  for (let r = rows - 1; r >= 0; r--) {
+    if (bricks[r][c] === -1) continue;
+    if (claimed[r][c]) continue;
+    return r;
+  }
+  return -1;
+}
+function exposedColors() {
+  const set = new Set();
+  for (let c = 0; c < cols; c++) { const r = columnTarget(c); if (r >= 0) set.add(bricks[r][c]); }
+  return set;
+}
+function findTarget(o) {
+  let best = null, bd2 = Infinity;
+  for (let c = 0; c < cols; c++) {
+    const r = columnTarget(c);
+    if (r < 0 || bricks[r][c] !== o.color) continue;
+    const p = brickCenter(c, r);
+    const d2 = (p.x - o.x) * (p.x - o.x) + (p.y - o.y) * (p.y - o.y);
+    if (d2 < bd2) { bd2 = d2; best = { c, r, x: p.x, y: p.y }; }
+  }
+  return best;
+}
+function brickCenter(c, r) {
+  return { x: wallX + (c + 0.5) * bw, y: wallY + r * bd + bd * 0.5 + bf * 0.5 };
+}
+
+/* ---------- actions ---------- */
+function deploy(o) {
+  if (over) return;
+  const free = pads.indexOf(null);
+  if (free === -1) { o.shake = 0.4; kick(); return; }
+  if (!exposedColors().has(o.color)) {
+    o.shake = 0.5;
+    loseLife();
+    kick();
+    return;
+  }
+  o.pad = free; pads[free] = o;
+  o.state = 'toPad'; o.t = 0;
+  o.fx = o.x; o.fy = o.y; o.tx = padXs[free]; o.ty = padY;
+  o.cool = 0.15; o.idle = 0;
+  kick();
+}
+function recall(o) {
+  if (o.state !== 'pad') return;
+  pads[o.pad] = null;
+  o.pad = -1;
+  const p = trayPos(o.slot);
+  o.state = 'toTray'; o.t = 0; o.fx = o.x; o.fy = o.y; o.tx = p.x; o.ty = p.y;
+  kick();
+}
+function loseLife() {
+  if (over) return;
+  lives--;
+  const hearts = livesEl.children;
+  if (hearts[lives]) hearts[lives].classList.add('lost');
+  if (lives <= 0) endGame(false);
+}
+function destroyBrick(c, r) {
+  if (bricks[r][c] === -1) return;
+  const color = colors[bricks[r][c]];
+  bricks[r][c] = -1; claimed[r][c] = false; remaining--;
+  wallDirty = true;
+  const p = brickCenter(c, r);
+  for (let i = 0; i < 7; i++) {
+    const a = Math.random() * 6.28, s = 60 + Math.random() * 160;
+    particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60,
+                     life: 0.5 + Math.random() * 0.3, t: 0, size: bw * (0.14 + Math.random() * 0.2), color });
+  }
+  if (remaining === 0) endGame(true);
+}
+function endGame(win) {
+  over = win ? 'win' : 'lose';
+  if (win) {
+    for (let i = 0; i < 120; i++)
+      confetti.push({ x: Math.random() * W, y: -20 - Math.random() * H * 0.5,
+                      vx: (Math.random() - .5) * 60, vy: 120 + Math.random() * 180,
+                      rot: Math.random() * 6.28, vr: (Math.random() - .5) * 8,
+                      size: 5 + Math.random() * 7,
+                      color: colors[1 + Math.floor(Math.random() * (colors.length - 1))] });
+  }
+  setTimeout(() => {
+    ovEmoji.textContent = win ? '🐙' : '💔';
+    ovMsg.textContent = win ? 'Wall Cleared!' : 'Out of Hearts';
+    ovSub.textContent = win ? `Level ${level} demolished. The octopi are proud.`
+                            : 'Only deploy an octopus when its color shows at the front of the wall.';
+    ovBtn.textContent = win ? 'Next Level' : 'Retry';
+    overlay.classList.add('show');
+  }, win ? 900 : 500);
+  kick();
+}
+
+/* ---------- simulation ---------- */
+function tick(dt) {
+  let active = confetti.length > 0 || balls.length > 0 || particles.length > 0;
+
+  for (const o of octos) {
+    if (o.shake > 0) { o.shake -= dt; active = true; }
+    if (o.state === 'toPad' || o.state === 'toTray') {
+      o.t += dt / 0.4; active = true;
+      if (o.t >= 1) {
+        o.x = o.tx; o.y = o.ty;
+        o.state = o.state === 'toPad' ? 'pad' : 'tray';
+      } else {
+        const e = easeInOut(o.t);
+        o.x = o.fx + (o.tx - o.fx) * e;
+        o.y = o.fy + (o.ty - o.fy) * e - Math.sin(o.t * Math.PI) * 46;
+      }
+    } else if (o.state === 'pad') {
+      o.bob += dt * 7; active = true;
+      if (over) continue;
+      o.cool -= dt;
+      if (o.cool <= 0 && o.ammo > 0) {
+        const tg = findTarget(o);
+        if (tg) {
+          o.idle = 0; o.cool = FIRE_INTERVAL;
+          claimed[tg.r][tg.c] = true;
+          o.ammo--; o.inflight++;
+          const sx = o.x, sy = o.y - octoR * 1.5;
+          const dist = Math.hypot(tg.x - sx, tg.y - sy);
+          balls.push({ sx, sy, tx: tg.x, ty: tg.y,
+                       cx: (sx + tg.x) / 2 + (sx < tg.x ? -1 : 1) * dist * 0.12, cy: (sy + tg.y) / 2,
+                       t: 0, dur: Math.max(0.16, dist / BALL_SPEED),
+                       color: colors[o.color], c: tg.c, r: tg.r, o, trail: [] });
+        } else {
+          o.idle += dt;
+          if (o.idle > 0.7 && o.inflight === 0 && o.ammo > 0) recall(o);
+        }
+      }
+      if (o.ammo <= 0 && o.inflight === 0 && o.state === 'pad') {
+        o.state = 'dying'; o.t = 0;
+        pads[o.pad] = null; o.pad = -1;
+      }
+    } else if (o.state === 'dying') {
+      o.t += dt / 0.35; active = true;
+      if (o.t >= 1) o.state = 'dead';
+    }
+  }
+
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i];
+    b.t += dt / b.dur;
+    const t = Math.min(1, b.t), u = 1 - t;
+    b.x = u * u * b.sx + 2 * u * t * b.cx + t * t * b.tx;
+    b.y = u * u * b.sy + 2 * u * t * b.cy + t * t * b.ty;
+    b.trail.push(b.x, b.y);
+    if (b.trail.length > 12) b.trail.splice(0, 2);
+    if (b.t >= 1) {
+      b.o.inflight--;
+      destroyBrick(b.c, b.r);
+      balls.splice(i, 1);
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.t += dt;
+    if (p.t >= p.life) { particles.splice(i, 1); continue; }
+    p.vy += 500 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+
+  for (let i = confetti.length - 1; i >= 0; i--) {
+    const f = confetti[i];
+    f.y += f.vy * dt; f.x += f.vx * dt + Math.sin(f.y * 0.02) * 40 * dt; f.rot += f.vr * dt;
+    if (f.y > H + 30) confetti.splice(i, 1);
+  }
+  return active;
+}
+
+/* ---------- drawing ---------- */
+function drawWallCache() {
+  const g = wallCv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  // floor panel under the wall
+  g.fillStyle = 'rgba(0,0,0,.28)';
+  g.beginPath();
+  g.roundRect(wallX - 6, wallY - 6, cols * bw + 12, rows * bd + bf + 12, 10);
+  g.fill();
+  const gap = Math.max(1, bw * 0.06);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const ci = bricks[r][c];
+      if (ci === -1) continue;
+      const base = colors[ci], sh = shadeMap[r][c];
+      const x = wallX + c * bw, y = wallY + r * bd;
+      // front face (visible when the brick in front is gone, or it's the front row)
+      if (r === rows - 1 || bricks[r + 1][c] === -1) {
+        g.fillStyle = shade(base, -0.42 + sh);
+        g.fillRect(x, y + bd, bw - gap, bf);
+        g.fillStyle = 'rgba(255,255,255,.10)';
+        g.fillRect(x, y + bd, bw - gap, Math.max(1, bf * 0.12));
+      }
+      // top face
+      g.fillStyle = shade(base, 0.06 + sh);
+      g.fillRect(x, y, bw - gap, bd - gap);
+      g.fillStyle = 'rgba(255,255,255,.08)';
+      g.fillRect(x, y, bw - gap, Math.max(1, bd * 0.14));
+    }
+  }
+  wallDirty = false;
+}
+
+function drawOcto(o, r) {
+  const x = o.x + (o.shake > 0 ? Math.sin(o.shake * 55) * 5 : 0);
+  let y = o.y, sc = 1, alpha = 1;
+  if (o.state === 'pad') { y += Math.sin(o.bob) * 2.5; sc = 1.12; }
+  if (o.state === 'dying') { sc = 1 + o.t * 0.6; alpha = 1 - o.t; }
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y); ctx.scale(sc, sc);
+  const col = colors[o.color];
+  const outline = shade(col, -0.45);
+  // legs: little bumps peeking out under the body
+  ctx.fillStyle = shade(col, -0.22);
+  for (let i = -1.5; i <= 1.5; i++) {
+    ctx.beginPath();
+    ctx.arc(i * r * 0.5, r * 0.78, r * 0.22, 0, 6.29);
+    ctx.fill();
+  }
+  // body: dome head, slightly narrower at the bottom
+  const grd = ctx.createRadialGradient(-r * 0.35, -r * 0.55, r * 0.15, 0, -r * 0.1, r * 1.35);
+  grd.addColorStop(0, shade(col, 0.32));
+  grd.addColorStop(1, shade(col, -0.06));
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.82, r * 0.72);
+  ctx.bezierCurveTo(-r * 1.12, r * 0.05, -r * 0.95, -r * 1.05, 0, -r * 1.05);
+  ctx.bezierCurveTo(r * 0.95, -r * 1.05, r * 1.12, r * 0.05, r * 0.82, r * 0.72);
+  ctx.closePath();
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, r * 0.08);
+  ctx.strokeStyle = outline;
+  ctx.stroke();
+  // eyes + smile
+  const ey = -r * 0.16, ex = r * 0.36;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-ex, ey, r * 0.24, 0, 6.29); ctx.arc(ex, ey, r * 0.24, 0, 6.29); ctx.fill();
+  ctx.fillStyle = '#1c1d26';
+  ctx.beginPath(); ctx.arc(-ex, ey, r * 0.115, 0, 6.29); ctx.arc(ex, ey, r * 0.115, 0, 6.29); ctx.fill();
+  ctx.strokeStyle = '#1c1d26';
+  ctx.lineWidth = Math.max(1, r * 0.07);
+  ctx.beginPath(); ctx.arc(0, r * 0.1, r * 0.22, 0.35, Math.PI - 0.35); ctx.stroke();
+  // ammo badge, tucked under the chin
+  if (o.state !== 'dying') {
+    const txt = String(o.ammo);
+    ctx.font = `800 ${Math.round(r * 0.52)}px system-ui, sans-serif`;
+    const tw = ctx.measureText(txt).width;
+    const bwd = tw + r * 0.5, bh = r * 0.6, by = r * 0.86;
+    ctx.fillStyle = 'rgba(255,255,255,.96)';
+    ctx.beginPath(); ctx.roundRect(-bwd / 2, by - bh / 2, bwd, bh, bh / 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.25)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#1c1d26';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(txt, 0, by + r * 0.02);
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  if (wallDirty) drawWallCache();
+  ctx.drawImage(wallCv, 0, 0, W, H);
+
+  // pads
+  const exposed = over ? new Set() : exposedColors();
+  for (let i = 0; i < PAD_COUNT; i++) {
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.beginPath();
+    ctx.ellipse(padXs[i], padY + padR * 0.55, padR * 1.25, padR * 0.5, 0, 0, 6.29);
+    ctx.fill();
+  }
+
+  // balls (under octos, over wall)
+  for (const b of balls) {
+    ctx.strokeStyle = 'rgba(255,255,255,.5)';
+    ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    if (b.trail.length >= 4) {
+      ctx.beginPath();
+      ctx.moveTo(b.trail[0], b.trail[1]);
+      for (let i = 2; i < b.trail.length; i += 2) ctx.lineTo(b.trail[i], b.trail[i + 1]);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(b.x, b.y, Math.max(3, bw * 0.16), 0, 6.29); ctx.fill();
+  }
+
+  // particles
+  for (const p of particles) {
+    ctx.globalAlpha = 1 - p.t / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  // tray octos first (behind), then travelling/pad ones
+  for (const o of octos) {
+    if (o.state === 'dead') continue;
+    if (o.state === 'tray') {
+      // deployable hint: a lit pad under octopi that can act right now
+      if (!over && exposed.has(o.color)) {
+        ctx.fillStyle = 'rgba(255,255,255,.16)';
+        ctx.beginPath();
+        ctx.ellipse(o.x, o.y + octoR * 0.95, octoR * 1.35, octoR * 0.5, 0, 0, 6.29);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      drawOcto(o, octoR);
+    }
+  }
+  for (const o of octos) {
+    if (o.state === 'dead' || o.state === 'tray') continue;
+    drawOcto(o, octoR * 1.06);
+  }
+
+  // confetti
+  for (const f of confetti) {
+    ctx.save();
+    ctx.translate(f.x, f.y); ctx.rotate(f.rot);
+    ctx.fillStyle = f.color;
+    ctx.fillRect(-f.size / 2, -f.size / 3, f.size, f.size * 0.66);
+    ctx.restore();
+  }
+}
+
+/* ---------- loop ---------- */
+function frame(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
+  lastT = t;
+  const active = tick(dt);
+  draw();
+  if (active) rafId = requestAnimationFrame(frame);
+  else rafId = 0;
+}
+function kick() {
+  if (!rafId) { lastT = performance.now(); rafId = requestAnimationFrame(frame); }
+}
+
+/* ---------- input ---------- */
+cv.addEventListener('pointerdown', e => {
+  if (over) return;
+  const rect = cv.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  // pad octos: tap to recall
+  for (const o of octos) {
+    if (o.state !== 'pad') continue;
+    if (Math.hypot(x - o.x, y - o.y) < octoR * 1.7) { recall(o); return; }
+  }
+  // tray octos: tap to deploy
+  let best = null, bd2 = Infinity;
+  for (const o of octos) {
+    if (o.state !== 'tray') continue;
+    const d2 = (x - o.x) * (x - o.x) + (y - o.y) * (y - o.y);
+    if (d2 < bd2) { bd2 = d2; best = o; }
+  }
+  if (best && bd2 < (trayCellW * 0.7) ** 2) deploy(best);
+});
+
+ovBtn.addEventListener('click', () => {
+  if (over === 'win') { level++; localStorage.setItem('octoBlastLevel', level); }
+  genLevel();
+});
+document.getElementById('restartBtn').addEventListener('click', genLevel);
+window.addEventListener('resize', layout);
+
+genLevel();
+</script>
+</body>
+</html>
